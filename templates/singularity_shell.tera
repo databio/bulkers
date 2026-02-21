@@ -1,0 +1,6 @@
+#!/bin/sh
+
+LC_ALL=C singularity shell \
+{% if singularity_args %}  {{ singularity_args }} \
+{% endif %}{% for volume in volumes %}{% if volume != "$HOME" and volume != "${HOME}" %}  -B "{{ volume }}:{{ volume }}" \
+{% endif %}{% endfor %}  {{ singularity_fullpath }}

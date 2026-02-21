@@ -1,0 +1,16 @@
+#!/bin/sh
+echo "Starting interactive docker shell for image '{{ docker_image }}' and command '{{ command }}'"
+docker run --rm --init -it \
+{% if dockerargs %}  {{ dockerargs }} \
+{% endif %}{% if docker_args %}  {{ docker_args }} \
+{% endif %}{% if not no_user %}  --user=$(id -u):$(id -g) \
+{% endif %}{% if not no_network %}  --network="host" \
+{% endif %}{% for envvar in envvars %}  --env "{{ envvar }}" \
+{% endfor %}{% for volume in volumes %}  --volume "{{ volume }}:{{ volume }}" \
+{% endfor %}{% if not no_user %}  --volume="/etc/group:/etc/group:ro" \
+  --volume="/etc/passwd:/etc/passwd:ro" \
+  --volume="/etc/shadow:/etc/shadow:ro" \
+  --volume="/etc/sudoers.d:/etc/sudoers.d:ro" \
+  --volume="/tmp/.X11-unix:/tmp/.X11-unix:rw" \
+{% endif %}  --workdir="{% if workdir %}{{ workdir }}{% else %}`pwd`{% endif %}" \
+  {{ docker_image }} bash
