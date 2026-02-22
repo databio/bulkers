@@ -123,6 +123,9 @@ pub fn activate(
 
     // Echo mode: print export statements and return
     if echo {
+        if std::env::var("BULKER_ORIG_PATH").is_err() {
+            println!("export BULKER_ORIG_PATH=\"$PATH\"");
+        }
         println!("export BULKERCRATE=\"{}\"", crate_name);
         println!("export BULKERPATH=\"{}\"", newpath);
         if prompt {
