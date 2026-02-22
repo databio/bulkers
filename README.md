@@ -54,3 +54,20 @@ bulkers() {
 ```
 
 Or build from source: `cargo install --path .`
+
+## AI-friendly use
+
+The shell function (`bulkers activate`/`bulkers deactivate`) modifies the current shell, which requires an interactive session with the function loaded. For AI agents, scripts, and non-interactive contexts, use `bulkers exec` instead:
+
+```bash
+# Run a single command in a crate environment (no shell function needed)
+bulkers exec bulker/demo -- cowsay hello
+
+# Run multiple commands
+bulkers exec databio/pepatac:1.0.13 -- samtools view -h input.bam
+
+# Strict mode (only crate commands on PATH)
+bulkers exec -s bulker/demo -- cowsay hi
+```
+
+`bulkers exec` is a binary command that works everywhere — CI pipelines, cron jobs, subprocess calls, AI agent tool use. No shell function or `eval` required.

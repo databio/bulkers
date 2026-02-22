@@ -29,12 +29,21 @@ case "$OS" in
     ;;
 esac
 
-# Download and install binary
-echo "Downloading $ASSET..."
+# Install binary
 mkdir -p "$INSTALL_DIR"
-curl -sL "https://github.com/$REPO/releases/latest/download/$ASSET" | tar xz -C "$INSTALL_DIR"
-chmod +x "$INSTALL_DIR/bulkers"
-echo "Installed bulkers to $INSTALL_DIR/bulkers"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LOCAL_BUILD="$SCRIPT_DIR/target/release/bulkers"
+
+if [ -f "$LOCAL_BUILD" ]; then
+  cp "$LOCAL_BUILD" "$INSTALL_DIR/bulkers"
+  chmod +x "$INSTALL_DIR/bulkers"
+  echo "Installed bulkers from local build to $INSTALL_DIR/bulkers"
+else
+  echo "Downloading $ASSET..."
+  curl -sL "https://github.com/$REPO/releases/latest/download/$ASSET" | tar xz -C "$INSTALL_DIR"
+  chmod +x "$INSTALL_DIR/bulkers"
+  echo "Installed bulkers to $INSTALL_DIR/bulkers"
+fi
 
 # Detect shell rc file
 SHELL_NAME="$(basename "$SHELL")"
@@ -51,12 +60,19 @@ bulkers() {
   case "$1" in
     activate)
       shift
+      _BULKER_OLD_PS1="$PS1"
       eval "$(\command bulkers activate -e "$@")"
+      if [ -n "$BULKERCRATE" ]; then
+        PS1="(\[\033[01;93m\]${BULKERCRATE}\[\033[00m\]) ${_BULKER_OLD_PS1}"
+      fi
       ;;
     deactivate)
       if [ -n "$BULKER_ORIG_PATH" ]; then
         export PATH="$BULKER_ORIG_PATH"
-        unset BULKERCRATE BULKERPATH BULKERPROMPT BULKERSHELLRC BULKER_ORIG_PATH
+        if [ -n "$_BULKER_OLD_PS1" ]; then
+          PS1="$_BULKER_OLD_PS1"
+        fi
+        unset BULKERCRATE BULKERPATH BULKERPROMPT BULKERSHELLRC BULKER_ORIG_PATH _BULKER_OLD_PS1
       fi
       ;;
     *)
@@ -66,9 +82,18 @@ bulkers() {
 }
 # <<< bulkers initialize <<<'
 
-# Append shell function if not already present
+# Install shell function (replace existing or append)
+END_MARKER="# <<< bulkers initialize <<<"
 if [ -f "$RC_FILE" ] && grep -qF "$MARKER" "$RC_FILE"; then
-  echo "Shell function already present in $RC_FILE"
+  # Replace existing block
+  tmpfile=$(mktemp)
+  awk -v start="$MARKER" -v end="$END_MARKER" -v func="$SHELL_FUNC" '
+    $0 == start { skip=1; printed=1; print func; next }
+    $0 == end { skip=0; next }
+    !skip { print }
+  ' "$RC_FILE" > "$tmpfile"
+  mv "$tmpfile" "$RC_FILE"
+  echo "Updated shell function in $RC_FILE"
 else
   echo "" >> "$RC_FILE"
   echo "$SHELL_FUNC" >> "$RC_FILE"
