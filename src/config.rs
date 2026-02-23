@@ -1,5 +1,5 @@
 use anyhow::{Context, Result, bail};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -7,11 +7,31 @@ use crate::manifest::CrateVars;
 
 const BULKERCFG_ENV: &str = "BULKERCFG";
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Clone)]
 pub struct CrateEntry {
     pub path: String,
     #[serde(default)]
     pub imports: Vec<String>,
+}
+
+// Accept both a bare string (old bulker format) and a struct with path/imports fields.
+impl<'de> Deserialize<'de> for CrateEntry {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum RawCrateEntry {
+            Path(String),
+            Full { path: String, #[serde(default)] imports: Vec<String> },
+        }
+
+        match RawCrateEntry::deserialize(deserializer)? {
+            RawCrateEntry::Path(path) => Ok(CrateEntry { path, imports: Vec::new() }),
+            RawCrateEntry::Full { path, imports } => Ok(CrateEntry { path, imports }),
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]

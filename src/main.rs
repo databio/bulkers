@@ -9,6 +9,7 @@ mod imports;
 mod manifest;
 mod mock;
 mod process;
+mod shimlink;
 mod templates;
 
 use anyhow::Result;
@@ -45,6 +46,13 @@ fn build_parser() -> Command {
 }
 
 fn main() -> Result<()> {
+    // Shimlink dispatch: if invoked as a symlink (argv[0] != "bulkers"),
+    // dispatch directly to the container command without clap parsing.
+    if let Some(cmd_name) = shimlink::detect_shimlink_invocation() {
+        let args: Vec<String> = std::env::args().skip(1).collect();
+        return shimlink::shimlink_exec(&cmd_name, &args);
+    }
+
     let app = build_parser();
     let matches = app.get_matches();
 

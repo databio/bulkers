@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::config::BulkerConfig;
 
@@ -28,13 +28,13 @@ impl CrateVars {
 }
 
 /// Manifest file structure (top-level).
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Manifest {
     pub manifest: ManifestInner,
 }
 
 /// Inner manifest data.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ManifestInner {
     #[serde(default)]
     #[allow(dead_code)]
@@ -51,7 +51,7 @@ pub struct ManifestInner {
 }
 
 /// A single command entry in the manifest.
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct PackageCommand {
     pub command: String,
     pub docker_image: String,

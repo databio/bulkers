@@ -1,11 +1,11 @@
 use anyhow::{Context, Result, bail};
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use crate::config::{BulkerConfig, CrateEntry, mkabs};
 use crate::manifest::{
     CrateVars, Manifest, PackageCommand, load_remote_manifest, parse_docker_image_path,
 };
+use crate::shimlink;
 use crate::templates;
 
 /// Get the local filesystem path for a crate.
@@ -51,7 +51,8 @@ fn host_tool_specific_args(
     String::new()
 }
 
-/// Load a crate from a manifest, rendering executable scripts.
+/// Install a crate: cache the manifest and update the config.
+/// No longer generates shell scripts; shimlinks are created at activate time.
 pub fn load_crate(
     manifest: &Manifest,
     cratevars: &CrateVars,
@@ -77,78 +78,24 @@ pub fn load_crate(
     std::fs::create_dir_all(crate_path)
         .with_context(|| format!("Failed to create crate dir: {}", crate_path.display()))?;
 
-    let exe_template = templates::get_exe_template(config);
-    let shell_template = templates::get_shell_template(config);
-    let build_template = templates::get_build_template(config);
+    // Cache the manifest for runtime shimlink dispatch
+    shimlink::cache_manifest(manifest, crate_path)?;
 
-    let is_apptainer = config.bulker.container_engine == "apptainer";
-    let mut commands_created = 0;
+    let commands_count = manifest.manifest.commands.len() + manifest.manifest.host_commands.len();
 
-    for pkg in &manifest.manifest.commands {
-        let extra_args = host_tool_specific_args(config, pkg, "docker_args");
+    if commands_count == 0 {
+        let _ = std::fs::remove_dir_all(crate_path);
+        bail!("No commands in crate '{}'", cratevars.display_name());
+    }
 
-        // Render executable
-        let exe_content = if is_apptainer {
-            let (img_ns, img_name, _img_tag) = parse_docker_image_path(&pkg.docker_image);
-            let apptainer_image = format!("{}-{}.sif", img_ns, img_name);
-            let apptainer_fullpath = config
-                .bulker
-                .apptainer_image_folder
-                .as_deref()
-                .map(|f| format!("{}/{}", f, apptainer_image))
-                .unwrap_or_else(|| apptainer_image.clone());
+    // Optionally build (pull) container images
+    if build {
+        let is_apptainer = config.bulker.container_engine == "apptainer";
+        let build_template = templates::get_build_template(config);
 
-            templates::render_template_apptainer(
-                exe_template,
-                "executable",
-                config,
-                pkg,
-                &extra_args,
-                &apptainer_image,
-                &apptainer_fullpath,
-            )?
-        } else {
-            templates::render_template(exe_template, "executable", config, pkg, &extra_args)?
-        };
+        for pkg in &manifest.manifest.commands {
+            let extra_args = host_tool_specific_args(config, pkg, "docker_args");
 
-        // Write executable
-        let exe_path = crate_path.join(&pkg.command);
-        std::fs::write(&exe_path, &exe_content)
-            .with_context(|| format!("Failed to write executable: {}", exe_path.display()))?;
-        std::fs::set_permissions(&exe_path, std::fs::Permissions::from_mode(0o755))?;
-        log::debug!("Created executable: {}", exe_path.display());
-
-        // Render shell wrapper (prefixed with _)
-        let shell_content = if is_apptainer {
-            let (img_ns, img_name, _img_tag) = parse_docker_image_path(&pkg.docker_image);
-            let apptainer_image = format!("{}-{}.sif", img_ns, img_name);
-            let apptainer_fullpath = config
-                .bulker
-                .apptainer_image_folder
-                .as_deref()
-                .map(|f| format!("{}/{}", f, apptainer_image))
-                .unwrap_or_else(|| apptainer_image.clone());
-
-            templates::render_template_apptainer(
-                shell_template,
-                "shell",
-                config,
-                pkg,
-                &extra_args,
-                &apptainer_image,
-                &apptainer_fullpath,
-            )?
-        } else {
-            templates::render_template(shell_template, "shell", config, pkg, &extra_args)?
-        };
-
-        let shell_path = crate_path.join(format!("_{}", pkg.command));
-        std::fs::write(&shell_path, &shell_content)?;
-        std::fs::set_permissions(&shell_path, std::fs::Permissions::from_mode(0o755))?;
-        log::debug!("Created shell wrapper: {}", shell_path.display());
-
-        // Optionally build (pull) the image
-        if build {
             let build_content = if is_apptainer {
                 let (img_ns, img_name, _img_tag) = parse_docker_image_path(&pkg.docker_image);
                 let apptainer_image = format!("{}-{}.sif", img_ns, img_name);
@@ -182,37 +129,6 @@ pub fn load_crate(
                 log::warn!("Build script failed for: {}", pkg.command);
             }
         }
-
-        commands_created += 1;
-    }
-
-    // Handle host_commands (symlink host binaries into crate)
-    for host_cmd in &manifest.manifest.host_commands {
-        if let Ok(output) = std::process::Command::new("which")
-            .arg(host_cmd)
-            .output()
-        {
-            if output.status.success() {
-                let host_path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                let link_path = crate_path.join(host_cmd);
-                // Remove existing file/link
-                let _ = std::fs::remove_file(&link_path);
-                std::os::unix::fs::symlink(&host_path, &link_path)
-                    .with_context(|| {
-                        format!("Failed to symlink host command: {} -> {}", host_cmd, host_path)
-                    })?;
-                log::debug!("Symlinked host command: {} -> {}", host_cmd, host_path);
-                commands_created += 1;
-            } else {
-                log::warn!("Host command not found: {}", host_cmd);
-            }
-        }
-    }
-
-    if commands_created == 0 {
-        // Remove the empty crate directory
-        let _ = std::fs::remove_dir_all(crate_path);
-        bail!("No commands created for crate '{}'", cratevars.display_name());
     }
 
     // Update config crates map
@@ -230,7 +146,7 @@ pub fn load_crate(
     log::info!(
         "Installed crate '{}' with {} commands at {}",
         cratevars.display_name(),
-        commands_created,
+        commands_count,
         crate_path.display()
     );
 

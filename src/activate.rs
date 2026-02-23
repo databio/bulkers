@@ -1,14 +1,47 @@
 use anyhow::{Result, bail};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 
 use crate::config::BulkerConfig;
 use crate::imports;
 use crate::manifest::CrateVars;
+use crate::shimlink;
 
-/// Build the new PATH from a list of crates, resolving imports.
+/// Build the new PATH using shimlink directories.
+/// Creates a temp directory with symlinks to the bulkers binary for each command,
+/// then returns the PATH string with the shimlink dir prepended.
 pub fn get_new_path(config: &BulkerConfig, cratelist: &[CrateVars], strict: bool) -> Result<String> {
-    imports::resolve_paths_with_imports(config, cratelist, strict)
+    // Build a stable hash for the crate list so the shimdir is reusable across invocations
+    let mut hasher = DefaultHasher::new();
+    for cv in cratelist {
+        cv.display_name().hash(&mut hasher);
+    }
+    let hash = hasher.finish();
+    let shimdir = PathBuf::from(format!("/tmp/bulkers_{:016x}", hash));
+
+    // Resolve all crates including imports
+    let all_cratevars = imports::resolve_cratevars_with_imports(config, cratelist)?;
+
+    // Create (or refresh) the shimlink directory
+    if shimdir.exists() {
+        let _ = std::fs::remove_dir_all(&shimdir);
+    }
+
+    for cv in &all_cratevars {
+        let manifest = shimlink::load_cached_manifest(config, cv)?;
+        shimlink::create_shimlink_dir(&manifest, &shimdir)?;
+    }
+
+    let shimdir_str = shimdir.to_string_lossy().to_string();
+
+    if strict {
+        Ok(shimdir_str)
+    } else {
+        let current_path = std::env::var("PATH").unwrap_or_default();
+        Ok(format!("{}:{}", shimdir_str, current_path))
+    }
 }
 
 /// Determine the shell type from a shell path.
@@ -63,6 +96,10 @@ pub fn activate(
     prompt: bool,
 ) -> Result<()> {
     let newpath = get_new_path(config, cratelist, strict)?;
+    // Use the first crate's display_name for BULKERCRATE (shimlink needs this to find the manifest)
+    let crate_id = cratelist.first()
+        .map(|cv| cv.display_name())
+        .unwrap_or_default();
     let crate_name = crate_display_name(cratelist);
 
     // Resolve shell
@@ -110,7 +147,7 @@ pub fn activate(
         if std::env::var("BULKER_ORIG_PATH").is_err() {
             println!("export BULKER_ORIG_PATH=\"$PATH\"");
         }
-        println!("export BULKERCRATE=\"{}\"", crate_name);
+        println!("export BULKERCRATE=\"{}\"", crate_id);
         println!("export BULKERPATH=\"{}\"", newpath);
         if prompt {
             println!("export BULKERPROMPT=\"{}\"", ps1);
@@ -123,7 +160,7 @@ pub fn activate(
     // Set environment for the new shell
     // SAFETY: called in the main thread before exec replaces the process
     unsafe {
-        std::env::set_var("BULKERCRATE", &crate_name);
+        std::env::set_var("BULKERCRATE", &crate_id);
         std::env::set_var("BULKERPATH", &newpath);
         if prompt {
             std::env::set_var("BULKERPROMPT", &ps1);

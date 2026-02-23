@@ -34,6 +34,19 @@ eval "$(bulkers init-shell zsh)"    # for zsh
 
 Or build from source: `cargo install --path .`
 
+### Local repo install
+
+To install from a local clone of the repo:
+
+```bash
+cargo build --release
+./install.sh
+source ~/.bashrc  # or: source ~/.zshrc
+```
+
+This builds the binary, copies it to `~/.local/bin/`, and adds the shell function to your shell rc file.
+
+
 ## Usage
 
 Bulkers organizes commands into three groups:

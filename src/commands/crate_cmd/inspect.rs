@@ -4,6 +4,7 @@ use clap::{Arg, ArgMatches, Command};
 use crate::config::{BulkerConfig, select_config};
 use crate::crate_ops::get_local_path;
 use crate::manifest::parse_registry_paths;
+use crate::shimlink;
 
 pub fn create_cli() -> Command {
     Command::new("inspect")
@@ -39,45 +40,61 @@ pub fn run(matches: &ArgMatches) -> Result<()> {
         println!("Crate: {}", cratevars.display_name());
         println!("Path:  {}", crate_path);
 
-        // Show the crate's own commands
-        let path = std::path::PathBuf::from(&crate_path);
-        if path.is_dir() {
-            let mut commands: Vec<String> = std::fs::read_dir(&path)?
-                .filter_map(|e| e.ok())
-                .map(|e| e.file_name().to_string_lossy().to_string())
-                .filter(|name| !name.starts_with('_'))
-                .collect();
-            commands.sort();
+        // Load the cached manifest to list commands
+        match shimlink::load_cached_manifest(&config, &cratevars) {
+            Ok(manifest) => {
+                let mut commands: Vec<&str> = manifest.manifest.commands.iter()
+                    .map(|c| c.command.as_str())
+                    .collect();
+                commands.sort();
 
-            println!("Commands:");
-            for cmd in &commands {
-                println!("  {}", cmd);
+                println!("Commands:");
+                for cmd in &commands {
+                    println!("  {}", cmd);
+                }
+
+                if !manifest.manifest.host_commands.is_empty() {
+                    println!("Host commands:");
+                    for cmd in &manifest.manifest.host_commands {
+                        println!("  {}", cmd);
+                    }
+                }
+
+                let total = commands.len() + manifest.manifest.host_commands.len();
+                println!("\n{} commands available", total);
             }
-            println!("\n{} commands available", commands.len());
+            Err(_) => {
+                // Fall back to directory listing if no cached manifest
+                let path = std::path::PathBuf::from(&crate_path);
+                if path.is_dir() {
+                    let mut commands: Vec<String> = std::fs::read_dir(&path)?
+                        .filter_map(|e| e.ok())
+                        .map(|e| e.file_name().to_string_lossy().to_string())
+                        .filter(|name| !name.starts_with('_') && name != "manifest.yaml")
+                        .collect();
+                    commands.sort();
+
+                    println!("Commands:");
+                    for cmd in &commands {
+                        println!("  {}", cmd);
+                    }
+                    println!("\n{} commands available", commands.len());
+                }
+            }
         }
 
         // Show resolved imports
         if let Some(entry) = config.get_crate_entry(&cratevars) {
             if !entry.imports.is_empty() {
-                println!("\nImports:");
+                println!("Imports:");
                 for import in &entry.imports {
                     let import_cratevars = crate::manifest::parse_registry_path(import, &config.bulker.default_namespace);
-                    let import_path = get_local_path(&config, &import_cratevars);
-                    match import_path {
-                        Some(p) => {
-                            let ip = std::path::PathBuf::from(&p);
-                            let count = if ip.is_dir() {
-                                std::fs::read_dir(&ip)
-                                    .map(|rd| rd.filter_map(|e| e.ok())
-                                        .filter(|e| !e.file_name().to_string_lossy().starts_with('_'))
-                                        .count())
-                                    .unwrap_or(0)
-                            } else {
-                                0
-                            };
+                    match shimlink::load_cached_manifest(&config, &import_cratevars) {
+                        Ok(m) => {
+                            let count = m.manifest.commands.len() + m.manifest.host_commands.len();
                             println!("  {} ({} commands)", import, count);
                         }
-                        None => println!("  {} (not installed)", import),
+                        Err(_) => println!("  {} (not installed)", import),
                     }
                 }
             }

@@ -66,9 +66,14 @@ pub fn run(matches: &ArgMatches) -> Result<()> {
         .map(|a| shell_escape::escape(std::borrow::Cow::Borrowed(a.as_str())).to_string())
         .collect();
 
+    let crate_id = cratelist.first()
+        .map(|cv| cv.display_name())
+        .unwrap_or_default();
+
     let merged_command = format!(
-        "export PATH=\"{}\"; {}",
+        "export PATH=\"{}\"; export BULKERCRATE=\"{}\"; {}",
         newpath,
+        crate_id,
         quoted_args.join(" ")
     );
 

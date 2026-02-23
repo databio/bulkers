@@ -38,6 +38,55 @@ pub fn resolve_paths_with_imports(
     }
 }
 
+/// Resolve all CrateVars (including imports) for a list of crates.
+/// Returns a flat list of all CrateVars in dependency order.
+pub fn resolve_cratevars_with_imports(
+    config: &BulkerConfig,
+    cratelist: &[CrateVars],
+) -> Result<Vec<CrateVars>> {
+    let mut all_vars = Vec::new();
+    let mut visited = HashSet::new();
+
+    for cv in cratelist {
+        resolve_crate_vars(config, cv, &mut all_vars, &mut visited)?;
+    }
+
+    Ok(all_vars)
+}
+
+/// Recursively collect CrateVars for a crate and all its imports.
+fn resolve_crate_vars(
+    config: &BulkerConfig,
+    cratevars: &CrateVars,
+    vars: &mut Vec<CrateVars>,
+    visited: &mut HashSet<String>,
+) -> Result<()> {
+    let key = cratevars.display_name();
+    if visited.contains(&key) {
+        return Ok(());
+    }
+    visited.insert(key.clone());
+
+    let entry = get_crate_entry(config, cratevars)
+        .ok_or_else(|| anyhow::anyhow!(
+            "Crate '{}' is not installed. Run 'bulkers crate list' to see installed crates, or 'bulkers crate install' to add one.",
+            key
+        ))?;
+
+    vars.push(CrateVars {
+        namespace: cratevars.namespace.clone(),
+        crate_name: cratevars.crate_name.clone(),
+        tag: cratevars.tag.clone(),
+    });
+
+    for import_path in &entry.imports {
+        let import_cv = parse_registry_path(import_path, &config.bulker.default_namespace);
+        resolve_crate_vars(config, &import_cv, vars, visited)?;
+    }
+
+    Ok(())
+}
+
 /// Recursively resolve a crate's path and all its import paths (depth-first).
 fn resolve_crate_paths(
     config: &BulkerConfig,

@@ -123,9 +123,9 @@ fn test_crate_install_creates_executables() {
     let updated_config = fs::read_to_string(&config_path).unwrap();
     assert!(updated_config.contains("path:"), "config not updated with crate entry");
 
-    // Verify cowsay executable exists somewhere in the crate folder
-    let has_cowsay = walkdir(crate_folder.clone(), "cowsay");
-    assert!(has_cowsay, "cowsay executable not created in crate folder");
+    // With shimlinks, the crate folder contains a cached manifest.yaml instead of scripts
+    let has_manifest = walkdir(crate_folder.clone(), "manifest.yaml");
+    assert!(has_manifest, "cached manifest.yaml not created in crate folder");
 }
 
 /// Walk a directory looking for a file with the given name.
@@ -216,7 +216,7 @@ fn test_crate_uninstall() {
 #[test]
 fn test_activate_echo_mode() {
     let tmp = TempDir::new().unwrap();
-    let (config_path, crate_folder) = init_config(&tmp);
+    let (config_path, _crate_folder) = init_config(&tmp);
     install_test_crate(&tmp, &config_path);
 
     // Get crate name
@@ -241,7 +241,8 @@ fn test_activate_echo_mode() {
     assert!(stdout.contains("export BULKERCRATE="), "missing BULKERCRATE export: {}", stdout);
     assert!(stdout.contains("export BULKERPATH="), "missing BULKERPATH export: {}", stdout);
     assert!(stdout.contains("export PATH="), "missing PATH export: {}", stdout);
-    assert!(stdout.contains(&crate_folder.to_string_lossy().to_string()), "PATH doesn't contain crate folder: {}", stdout);
+    // With shimlinks, PATH contains /tmp/bulkers_* shimlink dir instead of the crate folder
+    assert!(stdout.contains("/tmp/bulkers_"), "PATH doesn't contain shimlink dir: {}", stdout);
 }
 
 #[test]
