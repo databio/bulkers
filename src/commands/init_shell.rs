@@ -4,6 +4,7 @@ use clap::{Arg, ArgMatches, Command};
 pub fn create_cli() -> Command {
     Command::new("init-shell")
         .about("Print shell function for ~/.bashrc or ~/.zshrc")
+        .hide(true)
         .after_help("\
 EXAMPLES:
   eval \"$(bulkers init-shell bash)\"     # add to ~/.bashrc

@@ -31,10 +31,16 @@ esac
 
 # Install binary
 mkdir -p "$INSTALL_DIR"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LOCAL_BUILD="$SCRIPT_DIR/target/release/bulkers"
 
-if [ -f "$LOCAL_BUILD" ]; then
+# Check for local build (only works when script is run as a file, not piped)
+if [ -n "${BASH_SOURCE[0]+x}" ]; then
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  LOCAL_BUILD="$SCRIPT_DIR/target/release/bulkers"
+else
+  LOCAL_BUILD=""
+fi
+
+if [ -n "$LOCAL_BUILD" ] && [ -f "$LOCAL_BUILD" ]; then
   cp "$LOCAL_BUILD" "$INSTALL_DIR/bulkers"
   chmod +x "$INSTALL_DIR/bulkers"
   echo "Installed bulkers from local build to $INSTALL_DIR/bulkers"
