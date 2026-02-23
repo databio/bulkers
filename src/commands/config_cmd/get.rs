@@ -14,7 +14,7 @@ EXAMPLES:
 
 SUPPORTED KEYS:
   container_engine, default_crate_folder, default_namespace, registry_url,
-  shell_path, shell_rc, envvars, volumes, shell_prompt, singularity_image_folder")
+  shell_path, shell_rc, envvars, volumes, shell_prompt, apptainer_image_folder")
         .arg(
             Arg::new("key")
                 .required(true)
@@ -49,12 +49,12 @@ pub fn run(matches: &ArgMatches) -> Result<()> {
                 println!("{}", p);
             }
         }
-        "singularity_image_folder" => {
-            if let Some(ref f) = config.bulker.singularity_image_folder {
+        "apptainer_image_folder" => {
+            if let Some(ref f) = config.bulker.apptainer_image_folder {
                 println!("{}", f);
             }
         }
-        _ => bail!("Unknown config key: '{}'. Supported keys: container_engine, default_crate_folder, default_namespace, registry_url, shell_path, shell_rc, envvars, volumes, shell_prompt, singularity_image_folder", key),
+        _ => bail!("Unknown config key: '{}'. Supported keys: container_engine, default_crate_folder, default_namespace, registry_url, shell_path, shell_rc, envvars, volumes, shell_prompt, apptainer_image_folder", key),
     }
 
     Ok(())

@@ -54,49 +54,26 @@ case "$SHELL_NAME" in
 esac
 
 MARKER="# >>> bulkers initialize >>>"
+END_MARKER="# <<< bulkers initialize <<<"
 
-SHELL_FUNC='# >>> bulkers initialize >>>
-bulkers() {
-  case "$1" in
-    activate)
-      shift
-      _BULKER_OLD_PS1="$PS1"
-      eval "$(\command bulkers activate --echo "$@")"
-      if [ -n "$BULKERCRATE" ]; then
-        PS1="(\[\033[01;93m\]${BULKERCRATE}\[\033[00m\]) ${_BULKER_OLD_PS1}"
-      fi
-      ;;
-    deactivate)
-      if [ -n "$BULKER_ORIG_PATH" ]; then
-        export PATH="$BULKER_ORIG_PATH"
-        if [ -n "$_BULKER_OLD_PS1" ]; then
-          PS1="$_BULKER_OLD_PS1"
-        fi
-        unset BULKERCRATE BULKERPATH BULKERPROMPT BULKERSHELLRC BULKER_ORIG_PATH _BULKER_OLD_PS1
-      fi
-      ;;
-    *)
-      \command bulkers "$@"
-      ;;
-  esac
-}
-# <<< bulkers initialize <<<'
+# Get shell function from bulkers itself
+SHELL_FUNC="$("$INSTALL_DIR/bulkers" init-shell "$SHELL_NAME")"
 
 # Install shell function (replace existing or append)
-END_MARKER="# <<< bulkers initialize <<<"
 if [ -f "$RC_FILE" ] && grep -qF "$MARKER" "$RC_FILE"; then
   # Replace existing block
   tmpfile=$(mktemp)
-  awk -v start="$MARKER" -v end="$END_MARKER" -v func="$SHELL_FUNC" '
-    $0 == start { skip=1; printed=1; print func; next }
+  awk -v start="$MARKER" -v end="$END_MARKER" '
+    $0 == start { skip=1; next }
     $0 == end { skip=0; next }
     !skip { print }
   ' "$RC_FILE" > "$tmpfile"
+  printf '%s\n' "$SHELL_FUNC" >> "$tmpfile"
   mv "$tmpfile" "$RC_FILE"
   echo "Updated shell function in $RC_FILE"
 else
   echo "" >> "$RC_FILE"
-  echo "$SHELL_FUNC" >> "$RC_FILE"
+  printf '%s\n' "$SHELL_FUNC" >> "$RC_FILE"
   echo "Added shell function to $RC_FILE"
 fi
 

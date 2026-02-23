@@ -28,32 +28,8 @@ curl -sL https://github.com/databio/bulkers/releases/latest/download/bulkers-mac
 2. Add to `~/.bashrc` (or `~/.zshrc`):
 
 ```bash
-# >>> bulkers initialize >>>
-bulkers() {
-  case "$1" in
-    activate)
-      shift
-      _BULKER_OLD_PS1="$PS1"
-      eval "$(\command bulkers activate --echo "$@")"
-      if [ -n "$BULKERCRATE" ]; then
-        PS1="(\[\033[01;93m\]${BULKERCRATE}\[\033[00m\]) ${_BULKER_OLD_PS1}"
-      fi
-      ;;
-    deactivate)
-      if [ -n "$BULKER_ORIG_PATH" ]; then
-        export PATH="$BULKER_ORIG_PATH"
-        if [ -n "$_BULKER_OLD_PS1" ]; then
-          PS1="$_BULKER_OLD_PS1"
-        fi
-        unset BULKERCRATE BULKERPATH BULKERPROMPT BULKERSHELLRC BULKER_ORIG_PATH _BULKER_OLD_PS1
-      fi
-      ;;
-    *)
-      \command bulkers "$@"
-      ;;
-  esac
-}
-# <<< bulkers initialize <<<
+eval "$(bulkers init-shell bash)"   # for bash
+eval "$(bulkers init-shell zsh)"    # for zsh
 ```
 
 Or build from source: `cargo install --path .`

@@ -81,15 +81,8 @@ pub fn run(matches: &ArgMatches) -> Result<()> {
         load_imports(&manifest, &mut config, &config_path, build)?;
     }
 
-    // Load the main crate
+    // Load the main crate (imports are stored automatically by load_crate)
     load_crate(&manifest, &cratevars, &mut config, &crate_path, build, force)?;
-
-    // Store import references in the crate entry
-    if !manifest.manifest.imports.is_empty() {
-        if let Some(entry) = config.get_crate_entry_mut(&cratevars) {
-            entry.imports = manifest.manifest.imports.clone();
-        }
-    }
 
     // Write updated config
     config.write(&config_path)?;

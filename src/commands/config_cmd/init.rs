@@ -12,12 +12,12 @@ pub fn create_cli() -> Command {
 EXAMPLES:
   bulkers config init
   bulkers config init -c ~/.config/bulker/bulker_config.yaml
-  bulkers config init -c ~/bulker_config.yaml -e singularity")
+  bulkers config init -c ~/bulker_config.yaml -e apptainer")
         .arg(
             Arg::new("engine")
                 .short('e')
                 .long("engine")
-                .value_parser(["docker", "singularity"])
+                .value_parser(["docker", "apptainer"])
                 .help("Container engine to use (auto-detected if not specified)"),
         )
 }
@@ -64,10 +64,10 @@ pub fn run(matches: &ArgMatches) -> Result<()> {
     // Set engine-specific template names
     config.bulker.container_engine = engine.clone();
     match engine.as_str() {
-        "singularity" => {
-            config.bulker.executable_template = "singularity_executable.tera".to_string();
-            config.bulker.shell_template = "singularity_shell.tera".to_string();
-            config.bulker.build_template = "singularity_build.tera".to_string();
+        "apptainer" => {
+            config.bulker.executable_template = "apptainer_executable.tera".to_string();
+            config.bulker.shell_template = "apptainer_shell.tera".to_string();
+            config.bulker.build_template = "apptainer_build.tera".to_string();
         }
         _ => {
             config.bulker.executable_template = "docker_executable.tera".to_string();
@@ -94,10 +94,10 @@ pub fn run(matches: &ArgMatches) -> Result<()> {
 fn detect_engine() -> Result<String> {
     if is_in_path("docker") {
         Ok("docker".to_string())
-    } else if is_in_path("singularity") {
-        Ok("singularity".to_string())
+    } else if is_in_path("apptainer") {
+        Ok("apptainer".to_string())
     } else {
-        bail!("No container engine found. Install docker or singularity, or specify with --engine.");
+        bail!("No container engine found. Install docker or apptainer, or specify with --engine.");
     }
 }
 

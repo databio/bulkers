@@ -45,7 +45,7 @@ pub struct BulkerSettings {
     #[serde(default)]
     pub shell_prompt: Option<String>,
     #[serde(default)]
-    pub singularity_image_folder: Option<String>,
+    pub apptainer_image_folder: Option<String>,
 }
 
 fn default_registry_url() -> String {
@@ -75,8 +75,8 @@ impl BulkerConfig {
         config.bulker.default_crate_folder = expand_path(&config.bulker.default_crate_folder);
         config.bulker.shell_path = expand_path(&config.bulker.shell_path);
         config.bulker.shell_rc = expand_path(&config.bulker.shell_rc);
-        if let Some(ref folder) = config.bulker.singularity_image_folder {
-            config.bulker.singularity_image_folder = Some(expand_path(folder));
+        if let Some(ref folder) = config.bulker.apptainer_image_folder {
+            config.bulker.apptainer_image_folder = Some(expand_path(folder));
         }
 
         Ok(config)

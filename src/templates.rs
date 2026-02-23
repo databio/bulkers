@@ -9,9 +9,9 @@ use crate::manifest::PackageCommand;
 pub const DOCKER_EXE_TEMPLATE: &str = include_str!("../templates/docker_executable.tera");
 pub const DOCKER_SHELL_TEMPLATE: &str = include_str!("../templates/docker_shell.tera");
 pub const DOCKER_BUILD_TEMPLATE: &str = include_str!("../templates/docker_build.tera");
-pub const SINGULARITY_EXE_TEMPLATE: &str = include_str!("../templates/singularity_executable.tera");
-pub const SINGULARITY_SHELL_TEMPLATE: &str = include_str!("../templates/singularity_shell.tera");
-pub const SINGULARITY_BUILD_TEMPLATE: &str = include_str!("../templates/singularity_build.tera");
+pub const APPTAINER_EXE_TEMPLATE: &str = include_str!("../templates/apptainer_executable.tera");
+pub const APPTAINER_SHELL_TEMPLATE: &str = include_str!("../templates/apptainer_shell.tera");
+pub const APPTAINER_BUILD_TEMPLATE: &str = include_str!("../templates/apptainer_build.tera");
 
 pub const BASH_RC: &str = include_str!("../templates/start.sh");
 pub const BASH_RC_STRICT: &str = include_str!("../templates/start_strict.sh");
@@ -28,9 +28,9 @@ pub fn write_templates_to_dir(dir: &Path) -> Result<()> {
         ("docker_executable.tera", DOCKER_EXE_TEMPLATE),
         ("docker_shell.tera", DOCKER_SHELL_TEMPLATE),
         ("docker_build.tera", DOCKER_BUILD_TEMPLATE),
-        ("singularity_executable.tera", SINGULARITY_EXE_TEMPLATE),
-        ("singularity_shell.tera", SINGULARITY_SHELL_TEMPLATE),
-        ("singularity_build.tera", SINGULARITY_BUILD_TEMPLATE),
+        ("apptainer_executable.tera", APPTAINER_EXE_TEMPLATE),
+        ("apptainer_shell.tera", APPTAINER_SHELL_TEMPLATE),
+        ("apptainer_build.tera", APPTAINER_BUILD_TEMPLATE),
         ("start.sh", BASH_RC),
         ("start_strict.sh", BASH_RC_STRICT),
     ];
@@ -113,9 +113,9 @@ fn build_context(
         ctx.insert("docker_args", &"");
     }
 
-    // Singularity-specific
-    ctx.insert("singularity_args", &pkg.singularity_args.as_deref().unwrap_or(""));
-    ctx.insert("singularity_command", &pkg.singularity_command.as_deref().unwrap_or(""));
+    // Apptainer-specific
+    ctx.insert("apptainer_args", &pkg.apptainer_args.as_deref().unwrap_or(""));
+    ctx.insert("apptainer_command", &pkg.apptainer_command.as_deref().unwrap_or(""));
 
     ctx
 }
@@ -137,23 +137,23 @@ pub fn render_template(
         .with_context(|| format!("Failed to render template: {}", template_name))
 }
 
-/// Render an executable script with singularity-specific context added.
-pub fn render_template_singularity(
+/// Render an executable script with apptainer-specific context added.
+pub fn render_template_apptainer(
     template_content: &str,
     template_name: &str,
     config: &BulkerConfig,
     pkg: &PackageCommand,
     extra_docker_args: &str,
-    singularity_image: &str,
-    singularity_fullpath: &str,
+    apptainer_image: &str,
+    apptainer_fullpath: &str,
 ) -> Result<String> {
     let mut tera = Tera::default();
     tera.add_raw_template(template_name, template_content)
         .with_context(|| format!("Failed to parse template: {}", template_name))?;
 
     let mut ctx = build_context(config, pkg, extra_docker_args);
-    ctx.insert("singularity_image", singularity_image);
-    ctx.insert("singularity_fullpath", singularity_fullpath);
+    ctx.insert("apptainer_image", apptainer_image);
+    ctx.insert("apptainer_fullpath", apptainer_fullpath);
 
     tera.render(template_name, &ctx)
         .with_context(|| format!("Failed to render template: {}", template_name))
@@ -161,8 +161,8 @@ pub fn render_template_singularity(
 
 /// Get the executable template content for the configured engine.
 pub fn get_exe_template(config: &BulkerConfig) -> &'static str {
-    if config.bulker.container_engine == "singularity" {
-        SINGULARITY_EXE_TEMPLATE
+    if config.bulker.container_engine == "apptainer" {
+        APPTAINER_EXE_TEMPLATE
     } else {
         DOCKER_EXE_TEMPLATE
     }
@@ -170,8 +170,8 @@ pub fn get_exe_template(config: &BulkerConfig) -> &'static str {
 
 /// Get the shell template content for the configured engine.
 pub fn get_shell_template(config: &BulkerConfig) -> &'static str {
-    if config.bulker.container_engine == "singularity" {
-        SINGULARITY_SHELL_TEMPLATE
+    if config.bulker.container_engine == "apptainer" {
+        APPTAINER_SHELL_TEMPLATE
     } else {
         DOCKER_SHELL_TEMPLATE
     }
@@ -179,8 +179,8 @@ pub fn get_shell_template(config: &BulkerConfig) -> &'static str {
 
 /// Get the build template content for the configured engine.
 pub fn get_build_template(config: &BulkerConfig) -> &'static str {
-    if config.bulker.container_engine == "singularity" {
-        SINGULARITY_BUILD_TEMPLATE
+    if config.bulker.container_engine == "apptainer" {
+        APPTAINER_BUILD_TEMPLATE
     } else {
         DOCKER_BUILD_TEMPLATE
     }

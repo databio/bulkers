@@ -1,6 +1,6 @@
 #!/bin/sh
 
-LC_ALL=C singularity shell \
-{% if singularity_args %}  {{ singularity_args }} \
+LC_ALL=C apptainer shell \
+{% if apptainer_args %}  {{ apptainer_args }} \
 {% endif %}{% for volume in volumes %}{% if volume != "$HOME" and volume != "${HOME}" %}  -B "{{ volume }}:{{ volume }}" \
-{% endif %}{% endfor %}  {{ singularity_fullpath }}
+{% endif %}{% endfor %}  {{ apptainer_fullpath }}

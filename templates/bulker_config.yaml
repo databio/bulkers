@@ -7,7 +7,7 @@ bulker:
   rcfile: start.sh
   rcfile_strict: start_strict.sh
   default_crate_folder: ${HOME}/bulker_crates
-  singularity_image_folder: ${HOME}/simages
+  apptainer_image_folder: ${HOME}/simages
   container_engine: docker
   default_namespace: bulker
   executable_template: docker_executable.tera

@@ -62,9 +62,9 @@ pub struct PackageCommand {
     #[serde(default)]
     pub dockerargs: Option<String>,
     #[serde(default)]
-    pub singularity_args: Option<String>,
+    pub apptainer_args: Option<String>,
     #[serde(default)]
-    pub singularity_command: Option<String>,
+    pub apptainer_command: Option<String>,
     #[serde(default)]
     pub volumes: Vec<String>,
     #[serde(default)]
@@ -164,7 +164,7 @@ pub fn load_remote_manifest(
     Ok((manifest, cratevars))
 }
 
-/// Parse a docker image path into (namespace, image_name, tag) for singularity.
+/// Parse a docker image path into (namespace, image_name, tag) for apptainer.
 pub fn parse_docker_image_path(docker_image: &str) -> (String, String, String) {
     // e.g. "quay.io/biocontainers/samtools:1.9--h91753b0_8"
     let (name_part, tag) = if let Some(idx) = docker_image.rfind(':') {
@@ -313,7 +313,7 @@ mod tests {
                 crates: None,
                 tool_args: None,
                 shell_prompt: None,
-                singularity_image_folder: None,
+                apptainer_image_folder: None,
             },
         }
     }

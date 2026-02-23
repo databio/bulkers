@@ -1,64 +1,14 @@
 use anyhow::{Result, bail};
-use std::collections::HashSet;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 
 use crate::config::BulkerConfig;
-use crate::crate_ops::get_local_path;
-use crate::manifest::{CrateVars, parse_registry_path};
-
-/// Resolve a crate's path and all its imports recursively (depth-first).
-fn resolve_crate_paths(
-    config: &BulkerConfig,
-    cratevars: &CrateVars,
-    visited: &mut HashSet<String>,
-) -> Result<Vec<String>> {
-    let display = cratevars.display_name();
-    if visited.contains(&display) {
-        return Ok(Vec::new());
-    }
-    visited.insert(display.clone());
-
-    let mut paths = Vec::new();
-
-    // Add the crate's own path first
-    let path = get_local_path(config, cratevars)
-        .ok_or_else(|| anyhow::anyhow!(
-            "Crate '{}' is not installed. Run 'bulkers crate list' to see installed crates, or 'bulkers crate install' to add one.",
-            display
-        ))?;
-    paths.push(path);
-
-    // Resolve imports recursively
-    if let Some(entry) = config.get_crate_entry(cratevars) {
-        for import in &entry.imports {
-            let import_cv = parse_registry_path(import, &config.bulker.default_namespace);
-            let import_paths = resolve_crate_paths(config, &import_cv, visited)?;
-            paths.extend(import_paths);
-        }
-    }
-
-    Ok(paths)
-}
+use crate::imports;
+use crate::manifest::CrateVars;
 
 /// Build the new PATH from a list of crates, resolving imports.
 pub fn get_new_path(config: &BulkerConfig, cratelist: &[CrateVars], strict: bool) -> Result<String> {
-    let mut all_paths = Vec::new();
-    let mut visited = HashSet::new();
-
-    for cv in cratelist {
-        let paths = resolve_crate_paths(config, cv, &mut visited)?;
-        all_paths.extend(paths);
-    }
-
-    let crate_path_str = all_paths.join(":");
-
-    if strict {
-        Ok(crate_path_str)
-    } else {
-        let current_path = std::env::var("PATH").unwrap_or_default();
-        Ok(format!("{}:{}", crate_path_str, current_path))
-    }
+    imports::resolve_paths_with_imports(config, cratelist, strict)
 }
 
 /// Determine the shell type from a shell path.

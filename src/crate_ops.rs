@@ -18,11 +18,7 @@ pub fn get_crate_path(config: &BulkerConfig, cratevars: &CrateVars) -> PathBuf {
 
 /// Get the stored local path for a crate from the config.
 pub fn get_local_path(config: &BulkerConfig, cratevars: &CrateVars) -> Option<String> {
-    config.crates()
-        .get(&cratevars.namespace)?
-        .get(&cratevars.crate_name)?
-        .get(&cratevars.tag)
-        .map(|entry| entry.path.clone())
+    crate::imports::get_crate_entry(config, cratevars).map(|entry| entry.path.clone())
 }
 
 /// Look up host-tool-specific arguments from the config's tool_args.
@@ -85,31 +81,31 @@ pub fn load_crate(
     let shell_template = templates::get_shell_template(config);
     let build_template = templates::get_build_template(config);
 
-    let is_singularity = config.bulker.container_engine == "singularity";
+    let is_apptainer = config.bulker.container_engine == "apptainer";
     let mut commands_created = 0;
 
     for pkg in &manifest.manifest.commands {
         let extra_args = host_tool_specific_args(config, pkg, "docker_args");
 
         // Render executable
-        let exe_content = if is_singularity {
+        let exe_content = if is_apptainer {
             let (img_ns, img_name, _img_tag) = parse_docker_image_path(&pkg.docker_image);
-            let singularity_image = format!("{}-{}.sif", img_ns, img_name);
-            let singularity_fullpath = config
+            let apptainer_image = format!("{}-{}.sif", img_ns, img_name);
+            let apptainer_fullpath = config
                 .bulker
-                .singularity_image_folder
+                .apptainer_image_folder
                 .as_deref()
-                .map(|f| format!("{}/{}", f, singularity_image))
-                .unwrap_or_else(|| singularity_image.clone());
+                .map(|f| format!("{}/{}", f, apptainer_image))
+                .unwrap_or_else(|| apptainer_image.clone());
 
-            templates::render_template_singularity(
+            templates::render_template_apptainer(
                 exe_template,
                 "executable",
                 config,
                 pkg,
                 &extra_args,
-                &singularity_image,
-                &singularity_fullpath,
+                &apptainer_image,
+                &apptainer_fullpath,
             )?
         } else {
             templates::render_template(exe_template, "executable", config, pkg, &extra_args)?
@@ -123,24 +119,24 @@ pub fn load_crate(
         log::debug!("Created executable: {}", exe_path.display());
 
         // Render shell wrapper (prefixed with _)
-        let shell_content = if is_singularity {
+        let shell_content = if is_apptainer {
             let (img_ns, img_name, _img_tag) = parse_docker_image_path(&pkg.docker_image);
-            let singularity_image = format!("{}-{}.sif", img_ns, img_name);
-            let singularity_fullpath = config
+            let apptainer_image = format!("{}-{}.sif", img_ns, img_name);
+            let apptainer_fullpath = config
                 .bulker
-                .singularity_image_folder
+                .apptainer_image_folder
                 .as_deref()
-                .map(|f| format!("{}/{}", f, singularity_image))
-                .unwrap_or_else(|| singularity_image.clone());
+                .map(|f| format!("{}/{}", f, apptainer_image))
+                .unwrap_or_else(|| apptainer_image.clone());
 
-            templates::render_template_singularity(
+            templates::render_template_apptainer(
                 shell_template,
                 "shell",
                 config,
                 pkg,
                 &extra_args,
-                &singularity_image,
-                &singularity_fullpath,
+                &apptainer_image,
+                &apptainer_fullpath,
             )?
         } else {
             templates::render_template(shell_template, "shell", config, pkg, &extra_args)?
@@ -153,24 +149,24 @@ pub fn load_crate(
 
         // Optionally build (pull) the image
         if build {
-            let build_content = if is_singularity {
+            let build_content = if is_apptainer {
                 let (img_ns, img_name, _img_tag) = parse_docker_image_path(&pkg.docker_image);
-                let singularity_image = format!("{}-{}.sif", img_ns, img_name);
-                let singularity_fullpath = config
+                let apptainer_image = format!("{}-{}.sif", img_ns, img_name);
+                let apptainer_fullpath = config
                     .bulker
-                    .singularity_image_folder
+                    .apptainer_image_folder
                     .as_deref()
-                    .map(|f| format!("{}/{}", f, singularity_image))
-                    .unwrap_or_else(|| singularity_image.clone());
+                    .map(|f| format!("{}/{}", f, apptainer_image))
+                    .unwrap_or_else(|| apptainer_image.clone());
 
-                templates::render_template_singularity(
+                templates::render_template_apptainer(
                     build_template,
                     "build",
                     config,
                     pkg,
                     &extra_args,
-                    &singularity_image,
-                    &singularity_fullpath,
+                    &apptainer_image,
+                    &apptainer_fullpath,
                 )?
             } else {
                 templates::render_template(build_template, "build", config, pkg, &extra_args)?
@@ -228,7 +224,7 @@ pub fn load_crate(
         .or_default()
         .insert(cratevars.tag.clone(), CrateEntry {
             path: crate_path_str,
-            imports: Vec::new(),
+            imports: manifest.manifest.imports.clone(),
         });
 
     log::info!(
@@ -261,6 +257,7 @@ pub fn load_imports(
             load_imports(&import_manifest, config, config_path, build)?;
         }
 
+        // load_crate stores imports from the manifest automatically
         load_crate(
             &import_manifest,
             &import_cratevars,
@@ -269,13 +266,6 @@ pub fn load_imports(
             build,
             true, // force for imports
         )?;
-
-        // Store import references
-        if !import_manifest.manifest.imports.is_empty() {
-            if let Some(entry) = config.get_crate_entry_mut(&import_cratevars) {
-                entry.imports = import_manifest.manifest.imports.clone();
-            }
-        }
     }
     Ok(())
 }

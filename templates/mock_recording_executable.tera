@@ -1,0 +1,102 @@
+#!/usr/bin/env python3
+"""Recording executable for '{{ command }}' - captures outputs for mock replay."""
+import fcntl
+import json
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+COMMAND = "{{ command }}"
+REAL_EXECUTABLE = "{{ real_executable }}"
+
+def main():
+    record_file = os.environ.get("BULKER_MOCK_RECORD_FILE")
+    if not record_file:
+        print(f"BULKER_MOCK_RECORD_FILE not set; cannot record for '{COMMAND}'", file=sys.stderr)
+        sys.exit(1)
+
+    # Snapshot cwd file listing before execution
+    cwd = Path.cwd()
+    before = set()
+    try:
+        for p in cwd.rglob("*"):
+            if p.is_file():
+                before.add(str(p.relative_to(cwd)))
+    except OSError:
+        pass
+
+    # Run the real command
+    args_str = " ".join(sys.argv[1:])
+    try:
+        result = subprocess.run(
+            [REAL_EXECUTABLE] + sys.argv[1:],
+            capture_output=True,
+            text=True,
+        )
+    except OSError as e:
+        print(f"Failed to run real executable {REAL_EXECUTABLE}: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # Snapshot cwd file listing after execution
+    after = set()
+    try:
+        for p in cwd.rglob("*"):
+            if p.is_file():
+                after.add(str(p.relative_to(cwd)))
+    except OSError:
+        pass
+
+    new_files = after - before
+    creates_files = {}
+    for rel in sorted(new_files):
+        fp = cwd / rel
+        try:
+            # Try reading as text; fall back to placeholder for binary
+            content = fp.read_text()
+            creates_files[rel] = content
+        except (UnicodeDecodeError, OSError):
+            creates_files[rel] = "PLACEHOLDER_BINARY"
+
+    # Build the invocation record
+    record = {
+        "args_pattern": re.escape(args_str) if args_str else ".*",
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+        "returncode": result.returncode,
+        "creates_files": creates_files,
+    }
+
+    # Append to outputs.json (thread-safe with flock)
+    rf = Path(record_file)
+    rf.parent.mkdir(parents=True, exist_ok=True)
+    with open(rf, "a+") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        try:
+            f.seek(0)
+            content = f.read().strip()
+            if content:
+                outputs = json.loads(content)
+            else:
+                outputs = {}
+            outputs.setdefault(COMMAND, []).append(record)
+            f.seek(0)
+            f.truncate()
+            json.dump(outputs, f, indent=2)
+            f.write("\n")
+        finally:
+            fcntl.flock(f, fcntl.LOCK_UN)
+
+    # Replay captured output
+    if result.stdout:
+        sys.stdout.write(result.stdout)
+        sys.stdout.flush()
+    if result.stderr:
+        sys.stderr.write(result.stderr)
+        sys.stderr.flush()
+
+    sys.exit(result.returncode)
+
+if __name__ == "__main__":
+    main()

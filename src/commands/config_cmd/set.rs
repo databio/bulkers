@@ -8,7 +8,7 @@ pub fn create_cli() -> Command {
         .about("Set a configuration value")
         .after_help("\
 EXAMPLES:
-  bulkers config set container_engine=singularity
+  bulkers config set container_engine=apptainer
   bulkers config set envvars=HOME,DISPLAY,LANG
   bulkers config set shell_path=/bin/zsh
 
@@ -44,10 +44,10 @@ pub fn run(matches: &ArgMatches) -> Result<()> {
         "shell_prompt" => {
             config.bulker.shell_prompt = if value.is_empty() { None } else { Some(value.to_string()) };
         }
-        "singularity_image_folder" => {
-            config.bulker.singularity_image_folder = if value.is_empty() { None } else { Some(value.to_string()) };
+        "apptainer_image_folder" => {
+            config.bulker.apptainer_image_folder = if value.is_empty() { None } else { Some(value.to_string()) };
         }
-        _ => bail!("Unknown config key: '{}'. Supported keys: container_engine, default_crate_folder, default_namespace, registry_url, shell_path, shell_rc, envvars, volumes, shell_prompt, singularity_image_folder", key),
+        _ => bail!("Unknown config key: '{}'. Supported keys: container_engine, default_crate_folder, default_namespace, registry_url, shell_path, shell_rc, envvars, volumes, shell_prompt, apptainer_image_folder", key),
     }
 
     config.write(&config_path)?;

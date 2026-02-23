@@ -94,7 +94,7 @@ fn test_config_init_creates_config() {
     // Verify config content
     let content = fs::read_to_string(&config_path).unwrap();
     assert!(content.contains("container_engine"));
-    assert!(content.contains("docker") || content.contains("singularity"));
+    assert!(content.contains("docker") || content.contains("apptainer"));
 }
 
 #[test]
@@ -261,7 +261,7 @@ fn test_config_get_set() {
         .unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.trim() == "docker" || stdout.trim() == "singularity");
+    assert!(stdout.trim() == "docker" || stdout.trim() == "apptainer");
 
     // Set envvars
     let output = Command::new(bulkers_bin())
