@@ -32,33 +32,29 @@ fn create_test_manifest(dir: &std::path::Path) -> PathBuf {
     path
 }
 
-/// Helper: init a config and patch the crate folder to a temp dir.
-fn init_config(tmp: &TempDir) -> (PathBuf, PathBuf) {
-    let config_path = tmp.path().join("bulker_config.yaml");
-    let crate_folder = tmp.path().join("crates");
+/// Helper: run bulkers with XDG_CONFIG_HOME set to isolate manifest cache.
+fn bulkers_cmd(xdg_home: &std::path::Path) -> Command {
+    let mut cmd = Command::new(bulkers_bin());
+    cmd.env("XDG_CONFIG_HOME", xdg_home);
+    cmd
+}
 
-    Command::new(bulkers_bin())
+/// Helper: init a config in a temp dir.
+fn init_config(tmp: &TempDir) -> PathBuf {
+    let config_path = tmp.path().join("bulker_config.yaml");
+
+    bulkers_cmd(tmp.path())
         .args(["config", "init", "-c", config_path.to_str().unwrap()])
         .output()
         .expect("failed to run config init");
 
-    // Patch crate folder
-    let config_content = fs::read_to_string(&config_path).unwrap();
-    let mut lines: Vec<String> = config_content.lines().map(|l| l.to_string()).collect();
-    for line in &mut lines {
-        if line.contains("default_crate_folder") {
-            *line = format!("  default_crate_folder: {}", crate_folder.to_str().unwrap());
-        }
-    }
-    fs::write(&config_path, lines.join("\n")).unwrap();
-
-    (config_path, crate_folder)
+    config_path
 }
 
-/// Helper: install a test crate from a local manifest.
+/// Helper: install a test crate from a local manifest (populates manifest cache).
 fn install_test_crate(tmp: &TempDir, config_path: &std::path::Path) {
     let manifest_path = create_test_manifest(tmp.path());
-    let output = Command::new(bulkers_bin())
+    let output = bulkers_cmd(tmp.path())
         .args([
             "crate", "install",
             "-c", config_path.to_str().unwrap(),
@@ -76,7 +72,7 @@ fn test_config_init_creates_config() {
     let tmp = TempDir::new().unwrap();
     let config_path = tmp.path().join("bulker_config.yaml");
 
-    let output = Command::new(bulkers_bin())
+    let output = bulkers_cmd(tmp.path())
         .args(["config", "init", "-c", config_path.to_str().unwrap()])
         .output()
         .expect("failed to run config init");
@@ -98,13 +94,13 @@ fn test_config_init_creates_config() {
 }
 
 #[test]
-fn test_crate_install_creates_executables() {
+fn test_crate_install_caches_manifest() {
     let tmp = TempDir::new().unwrap();
-    let (config_path, crate_folder) = init_config(&tmp);
+    let config_path = init_config(&tmp);
     let manifest_path = create_test_manifest(tmp.path());
 
-    // Install using local file path
-    let output = Command::new(bulkers_bin())
+    // Install using local file path -- now caches to manifest cache dir, not crate folder
+    let output = bulkers_cmd(tmp.path())
         .args([
             "crate", "install",
             "-c", config_path.to_str().unwrap(),
@@ -113,126 +109,61 @@ fn test_crate_install_creates_executables() {
         .output()
         .expect("failed to run crate install");
 
-    assert!(output.status.success(), "crate install failed: {}\n{}",
-        String::from_utf8_lossy(&output.stderr),
-        String::from_utf8_lossy(&output.stdout));
-
-    // The manifest file path is used as the cratefile, so it gets parsed as a registry path.
-    // Since it's a local file, the crate name will be derived from the path.
-    // Let's check the config to see what was stored.
-    let updated_config = fs::read_to_string(&config_path).unwrap();
-    assert!(updated_config.contains("path:"), "config not updated with crate entry");
-
-    // With shimlinks, the crate folder contains a cached manifest.yaml instead of scripts
-    let has_manifest = walkdir(crate_folder.clone(), "manifest.yaml");
-    assert!(has_manifest, "cached manifest.yaml not created in crate folder");
-}
-
-/// Walk a directory looking for a file with the given name.
-fn walkdir(dir: PathBuf, name: &str) -> bool {
-    if !dir.exists() { return false; }
-    for entry in fs::read_dir(&dir).unwrap() {
-        let entry = entry.unwrap();
-        let path = entry.path();
-        if path.is_dir() {
-            if walkdir(path, name) { return true; }
-        } else if entry.file_name().to_string_lossy() == name {
-            return true;
-        }
-    }
-    false
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "crate install failed: {}\n{}", stderr, stdout);
+    assert!(stdout.contains("Cached:"), "install should report caching: {}", stdout);
 }
 
 #[test]
 fn test_crate_list() {
     let tmp = TempDir::new().unwrap();
-    let (config_path, _crate_folder) = init_config(&tmp);
+    let config_path = init_config(&tmp);
     install_test_crate(&tmp, &config_path);
 
     // List
-    let output = Command::new(bulkers_bin())
+    let output = bulkers_cmd(tmp.path())
         .args(["crate", "list", "-c", config_path.to_str().unwrap()])
         .output()
         .unwrap();
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("test_manifest"), "list output missing crate: {}", stdout);
+    assert!(stdout.contains("test_manifest") || stdout.contains("local/test_manifest"),
+        "list output missing crate: {}", stdout);
 }
 
 #[test]
 fn test_crate_inspect() {
     let tmp = TempDir::new().unwrap();
-    let (config_path, _crate_folder) = init_config(&tmp);
+    let config_path = init_config(&tmp);
     install_test_crate(&tmp, &config_path);
 
-    // Figure out the crate name from list output
-    let list_output = Command::new(bulkers_bin())
-        .args(["crate", "list", "-c", config_path.to_str().unwrap(), "--simple"])
-        .output()
-        .unwrap();
-    let crate_name = String::from_utf8_lossy(&list_output.stdout).trim().to_string();
-
-    // Inspect
-    let output = Command::new(bulkers_bin())
-        .args(["crate", "inspect", "-c", config_path.to_str().unwrap(), &crate_name])
+    // Inspect the cached crate (local/test_manifest:default)
+    let output = bulkers_cmd(tmp.path())
+        .args(["crate", "inspect", "-c", config_path.to_str().unwrap(), "local/test_manifest:default"])
         .output()
         .unwrap();
 
     let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "crate inspect failed: {}\n{}", stderr, stdout);
     assert!(stdout.contains("cowsay"), "inspect missing cowsay: {}", stdout);
     assert!(stdout.contains("fortune"), "inspect missing fortune: {}", stdout);
 }
 
 #[test]
-fn test_crate_uninstall() {
-    let tmp = TempDir::new().unwrap();
-    let (config_path, _crate_folder) = init_config(&tmp);
-    install_test_crate(&tmp, &config_path);
-
-    // Get crate name
-    let list_output = Command::new(bulkers_bin())
-        .args(["crate", "list", "-c", config_path.to_str().unwrap(), "--simple"])
-        .output()
-        .unwrap();
-    let crate_name = String::from_utf8_lossy(&list_output.stdout).trim().to_string();
-
-    // Uninstall
-    let output = Command::new(bulkers_bin())
-        .args(["crate", "uninstall", "-c", config_path.to_str().unwrap(), &crate_name])
-        .output()
-        .unwrap();
-
-    assert!(output.status.success(), "crate uninstall failed: {}", String::from_utf8_lossy(&output.stderr));
-
-    // Verify removed from list
-    let list_output = Command::new(bulkers_bin())
-        .args(["crate", "list", "-c", config_path.to_str().unwrap()])
-        .output()
-        .unwrap();
-    let stdout = String::from_utf8_lossy(&list_output.stdout);
-    assert!(stdout.contains("No crates installed"), "crate still listed after uninstall: {}", stdout);
-}
-
-#[test]
 fn test_activate_echo_mode() {
     let tmp = TempDir::new().unwrap();
-    let (config_path, _crate_folder) = init_config(&tmp);
+    let config_path = init_config(&tmp);
     install_test_crate(&tmp, &config_path);
 
-    // Get crate name
-    let list_output = Command::new(bulkers_bin())
-        .args(["crate", "list", "-c", config_path.to_str().unwrap(), "--simple"])
-        .output()
-        .unwrap();
-    let crate_name = String::from_utf8_lossy(&list_output.stdout).trim().to_string();
-
-    // Activate with --echo
-    let output = Command::new(bulkers_bin())
+    // Activate with --echo using the cached crate name
+    let output = bulkers_cmd(tmp.path())
         .args([
             "activate",
             "-c", config_path.to_str().unwrap(),
             "--echo",
-            &crate_name,
+            "local/test_manifest:default",
         ])
         .output()
         .unwrap();
@@ -241,8 +172,107 @@ fn test_activate_echo_mode() {
     assert!(stdout.contains("export BULKERCRATE="), "missing BULKERCRATE export: {}", stdout);
     assert!(stdout.contains("export BULKERPATH="), "missing BULKERPATH export: {}", stdout);
     assert!(stdout.contains("export PATH="), "missing PATH export: {}", stdout);
-    // With shimlinks, PATH contains /tmp/bulkers_* shimlink dir instead of the crate folder
+    // With shimlinks, PATH contains /tmp/bulkers_* shimlink dir
     assert!(stdout.contains("/tmp/bulkers_"), "PATH doesn't contain shimlink dir: {}", stdout);
+}
+
+#[test]
+fn test_activate_local_manifest() {
+    let tmp = TempDir::new().unwrap();
+    let config_path = init_config(&tmp);
+    let manifest_path = create_test_manifest(tmp.path());
+
+    // Activate a local manifest file directly (no prior install needed)
+    let output = bulkers_cmd(tmp.path())
+        .args([
+            "activate",
+            "-c", config_path.to_str().unwrap(),
+            "--echo",
+            manifest_path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "activate local manifest failed: {}\n{}", stderr, stdout);
+    assert!(stdout.contains("export PATH="), "missing PATH export: {}", stdout);
+    assert!(stdout.contains("/tmp/bulkers_"), "PATH doesn't contain shimlink dir: {}", stdout);
+}
+
+#[test]
+fn test_activate_force() {
+    let tmp = TempDir::new().unwrap();
+    let config_path = init_config(&tmp);
+    install_test_crate(&tmp, &config_path);
+
+    // Activate with --force should succeed with already-cached crate
+    let output = bulkers_cmd(tmp.path())
+        .args([
+            "activate",
+            "-c", config_path.to_str().unwrap(),
+            "--echo",
+            "--force",
+            "local/test_manifest:default",
+        ])
+        .output()
+        .unwrap();
+
+    // --force for a "local/" namespace crate will try to re-fetch from registry.
+    // Since "local/test_manifest" isn't on the registry, this will fail.
+    // That's the expected behavior: --force is for registry crates.
+    // We just check the flag is recognized (not an unrecognized flag error).
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("unrecognized"), "activate --force should be a recognized flag");
+}
+
+#[test]
+fn test_crate_clean_specific() {
+    let tmp = TempDir::new().unwrap();
+    let config_path = init_config(&tmp);
+    install_test_crate(&tmp, &config_path);
+
+    // Clean the specific crate
+    let output = bulkers_cmd(tmp.path())
+        .args(["crate", "clean", "-c", config_path.to_str().unwrap(), "local/test_manifest:default"])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "crate clean failed: {}", String::from_utf8_lossy(&output.stderr));
+    assert!(stdout.contains("Removed:"), "clean should report removal: {}", stdout);
+
+    // Verify no longer in list
+    let list_output = bulkers_cmd(tmp.path())
+        .args(["crate", "list", "-c", config_path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let list_stdout = String::from_utf8_lossy(&list_output.stdout);
+    assert!(list_stdout.contains("No cached crates") || !list_stdout.contains("test_manifest"),
+        "crate still listed after clean: {}", list_stdout);
+}
+
+#[test]
+fn test_crate_clean_all() {
+    let tmp = TempDir::new().unwrap();
+    let config_path = init_config(&tmp);
+    install_test_crate(&tmp, &config_path);
+
+    // Clean all cached crates
+    let output = bulkers_cmd(tmp.path())
+        .args(["crate", "clean", "-c", config_path.to_str().unwrap(), "--all"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "crate clean --all failed: {}", String::from_utf8_lossy(&output.stderr));
+
+    // Verify empty list
+    let list_output = bulkers_cmd(tmp.path())
+        .args(["crate", "list", "-c", config_path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let list_stdout = String::from_utf8_lossy(&list_output.stdout);
+    assert!(list_stdout.contains("No cached crates"), "crates still listed after clean --all: {}", list_stdout);
 }
 
 #[test]
@@ -250,13 +280,13 @@ fn test_config_get_set() {
     let tmp = TempDir::new().unwrap();
     let config_path = tmp.path().join("bulker_config.yaml");
 
-    Command::new(bulkers_bin())
+    bulkers_cmd(tmp.path())
         .args(["config", "init", "-c", config_path.to_str().unwrap()])
         .output()
         .unwrap();
 
     // Get a value
-    let output = Command::new(bulkers_bin())
+    let output = bulkers_cmd(tmp.path())
         .args(["config", "get", "-c", config_path.to_str().unwrap(), "container_engine"])
         .output()
         .unwrap();
@@ -265,14 +295,14 @@ fn test_config_get_set() {
     assert!(stdout.trim() == "docker" || stdout.trim() == "apptainer");
 
     // Set envvars
-    let output = Command::new(bulkers_bin())
+    let output = bulkers_cmd(tmp.path())
         .args(["config", "set", "-c", config_path.to_str().unwrap(), "envvars=HOME,DISPLAY,MY_VAR"])
         .output()
         .unwrap();
     assert!(output.status.success());
 
     // Get envvars back
-    let output = Command::new(bulkers_bin())
+    let output = bulkers_cmd(tmp.path())
         .args(["config", "get", "-c", config_path.to_str().unwrap(), "envvars"])
         .output()
         .unwrap();
@@ -280,7 +310,7 @@ fn test_config_get_set() {
     assert!(stdout.contains("MY_VAR"), "MY_VAR not in envvars: {}", stdout);
 
     // Config show
-    let output = Command::new(bulkers_bin())
+    let output = bulkers_cmd(tmp.path())
         .args(["config", "show", "-c", config_path.to_str().unwrap()])
         .output()
         .unwrap();

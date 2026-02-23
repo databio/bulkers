@@ -168,15 +168,6 @@ pub fn get_exe_template(config: &BulkerConfig) -> &'static str {
     }
 }
 
-/// Get the shell template content for the configured engine.
-pub fn get_shell_template(config: &BulkerConfig) -> &'static str {
-    if config.bulker.container_engine == "apptainer" {
-        APPTAINER_SHELL_TEMPLATE
-    } else {
-        DOCKER_SHELL_TEMPLATE
-    }
-}
-
 /// Get the build template content for the configured engine.
 pub fn get_build_template(config: &BulkerConfig) -> &'static str {
     if config.bulker.container_engine == "apptainer" {

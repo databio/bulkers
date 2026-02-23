@@ -58,7 +58,7 @@ pub fn run(matches: &ArgMatches) -> Result<()> {
 
     let cmd_args: Vec<&String> = matches.get_many::<String>("cmd").unwrap().collect();
 
-    let newpath = get_new_path(&config, &cratelist, strict)?;
+    let newpath = get_new_path(&config, &cratelist, strict, false)?;
 
     // Quote arguments with shell-escape
     let quoted_args: Vec<String> = cmd_args

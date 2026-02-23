@@ -1,38 +1,11 @@
 use anyhow::{Context, Result, bail};
-use serde::{Deserialize, Deserializer, Serialize};
-use std::collections::BTreeMap;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-use crate::manifest::CrateVars;
+use crate::manifest::PackageCommand;
+use crate::manifest::parse_docker_image_path;
 
 const BULKERCFG_ENV: &str = "BULKERCFG";
-
-#[derive(Debug, Serialize, Clone)]
-pub struct CrateEntry {
-    pub path: String,
-    #[serde(default)]
-    pub imports: Vec<String>,
-}
-
-// Accept both a bare string (old bulker format) and a struct with path/imports fields.
-impl<'de> Deserialize<'de> for CrateEntry {
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum RawCrateEntry {
-            Path(String),
-            Full { path: String, #[serde(default)] imports: Vec<String> },
-        }
-
-        match RawCrateEntry::deserialize(deserializer)? {
-            RawCrateEntry::Path(path) => Ok(CrateEntry { path, imports: Vec::new() }),
-            RawCrateEntry::Full { path, imports } => Ok(CrateEntry { path, imports }),
-        }
-    }
-}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BulkerConfig {
@@ -42,7 +15,6 @@ pub struct BulkerConfig {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BulkerSettings {
     pub container_engine: String,
-    pub default_crate_folder: String,
     pub default_namespace: String,
     #[serde(default = "default_registry_url")]
     pub registry_url: String,
@@ -58,8 +30,6 @@ pub struct BulkerSettings {
     pub volumes: Vec<String>,
     #[serde(default = "default_envvars")]
     pub envvars: Vec<String>,
-    #[serde(default)]
-    pub crates: Option<BTreeMap<String, BTreeMap<String, BTreeMap<String, CrateEntry>>>>,
     #[serde(default)]
     pub tool_args: Option<serde_yaml::Value>,
     #[serde(default)]
@@ -92,7 +62,6 @@ impl BulkerConfig {
             .with_context(|| format!("Failed to parse config: {}", path.display()))?;
 
         // Expand env vars in key paths
-        config.bulker.default_crate_folder = expand_path(&config.bulker.default_crate_folder);
         config.bulker.shell_path = expand_path(&config.bulker.shell_path);
         config.bulker.shell_rc = expand_path(&config.bulker.shell_rc);
         if let Some(ref folder) = config.bulker.apptainer_image_folder {
@@ -110,32 +79,28 @@ impl BulkerConfig {
         Ok(())
     }
 
-    /// Get or initialize the crates map, returning a mutable reference.
-    pub fn crates_mut(&mut self) -> &mut BTreeMap<String, BTreeMap<String, BTreeMap<String, CrateEntry>>> {
-        self.bulker.crates.get_or_insert_with(BTreeMap::new)
-    }
+    /// Look up host-tool-specific arguments from the config's tool_args.
+    pub fn host_tool_specific_args(&self, pkg: &PackageCommand, arg_key: &str) -> String {
+        let tool_args = match &self.bulker.tool_args {
+            Some(v) => v,
+            None => return String::new(),
+        };
 
-    /// Get a reference to the crates map (empty if None).
-    pub fn crates(&self) -> &BTreeMap<String, BTreeMap<String, BTreeMap<String, CrateEntry>>> {
-        static EMPTY: std::sync::LazyLock<BTreeMap<String, BTreeMap<String, BTreeMap<String, CrateEntry>>>> =
-            std::sync::LazyLock::new(BTreeMap::new);
-        self.bulker.crates.as_ref().unwrap_or(&EMPTY)
-    }
+        let (img_ns, img_name, img_tag) = parse_docker_image_path(&pkg.docker_image);
 
-    /// Get a CrateEntry by cratevars.
-    pub fn get_crate_entry(&self, cratevars: &CrateVars) -> Option<&CrateEntry> {
-        self.crates()
-            .get(&cratevars.namespace)?
-            .get(&cratevars.crate_name)?
-            .get(&cratevars.tag)
-    }
+        for tag in &[img_tag.as_str(), "default"] {
+            if let Some(val) = tool_args
+                .get(&img_ns)
+                .and_then(|ns| ns.get(&img_name))
+                .and_then(|img| img.get(*tag))
+                .and_then(|t| t.get(arg_key))
+                .and_then(|v| v.as_str())
+            {
+                return val.to_string();
+            }
+        }
 
-    /// Get a mutable CrateEntry by cratevars.
-    pub fn get_crate_entry_mut(&mut self, cratevars: &CrateVars) -> Option<&mut CrateEntry> {
-        self.crates_mut()
-            .get_mut(&cratevars.namespace)?
-            .get_mut(&cratevars.crate_name)?
-            .get_mut(&cratevars.tag)
+        String::new()
     }
 }
 
@@ -222,6 +187,7 @@ pub fn expand_path(s: &str) -> String {
 }
 
 /// Make a path absolute, resolving relative to `rel_dir` if provided.
+#[allow(dead_code)]
 pub fn mkabs(path: &str, rel_dir: Option<&Path>) -> PathBuf {
     let expanded = expand_path(path);
     let p = PathBuf::from(&expanded);

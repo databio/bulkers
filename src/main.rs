@@ -4,9 +4,9 @@ compile_error!("bulkers requires a Unix-like operating system (Linux, macOS)");
 mod activate;
 mod commands;
 mod config;
-mod crate_ops;
 mod imports;
 mod manifest;
+mod manifest_cache;
 mod mock;
 mod process;
 mod shimlink;
@@ -41,8 +41,7 @@ fn build_parser() -> Command {
         .subcommand(commands::crate_cmd::create_cli())
         .subcommand(commands::config_cmd::create_cli())
         .subcommand(commands::init_shell::create_cli())
-        .subcommand(commands::mock::create_cli())
-        .subcommand(commands::makemock::create_cli())
+        .subcommand(commands::mock_cmd::create_cli())
 }
 
 fn main() -> Result<()> {
@@ -73,8 +72,7 @@ fn main() -> Result<()> {
         Some(("crate", sub_m)) => commands::crate_cmd::dispatch(sub_m),
         Some(("config", sub_m)) => commands::config_cmd::dispatch(sub_m),
         Some(("init-shell", sub_m)) => commands::init_shell::run(sub_m),
-        Some(("mock", sub_m)) => commands::mock::run(sub_m),
-        Some(("makemock", sub_m)) => commands::makemock::run(sub_m),
+        Some(("mock", sub_m)) => commands::mock_cmd::dispatch(sub_m),
         _ => unreachable!("subcommand required"),
     }
 }

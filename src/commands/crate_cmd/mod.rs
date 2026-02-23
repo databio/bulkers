@@ -1,8 +1,7 @@
+pub mod clean;
 pub mod install;
 pub mod inspect;
 pub mod list;
-pub mod uninstall;
-pub mod update;
 
 use anyhow::Result;
 use clap::{Arg, ArgMatches, Command};
@@ -20,19 +19,17 @@ pub fn create_cli() -> Command {
                 .help("Bulker configuration file"),
         )
         .subcommand(install::create_cli())
-        .subcommand(uninstall::create_cli())
-        .subcommand(update::create_cli())
         .subcommand(list::create_cli())
         .subcommand(inspect::create_cli())
+        .subcommand(clean::create_cli())
 }
 
 pub fn dispatch(matches: &ArgMatches) -> Result<()> {
     match matches.subcommand() {
         Some(("install", sub_m)) => install::run(sub_m),
-        Some(("uninstall", sub_m)) => uninstall::run(sub_m),
-        Some(("update", sub_m)) => update::run(sub_m),
         Some(("list", sub_m)) => list::run(sub_m),
         Some(("inspect", sub_m)) => inspect::run(sub_m),
+        Some(("clean", sub_m)) => clean::run(sub_m),
         _ => unreachable!(),
     }
 }

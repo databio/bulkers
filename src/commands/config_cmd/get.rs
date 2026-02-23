@@ -13,7 +13,7 @@ EXAMPLES:
   bulkers config get shell_path
 
 SUPPORTED KEYS:
-  container_engine, default_crate_folder, default_namespace, registry_url,
+  container_engine, default_namespace, registry_url,
   shell_path, shell_rc, envvars, volumes, shell_prompt, apptainer_image_folder")
         .arg(
             Arg::new("key")
@@ -29,7 +29,6 @@ pub fn run(matches: &ArgMatches) -> Result<()> {
 
     match key.as_str() {
         "container_engine" => println!("{}", config.bulker.container_engine),
-        "default_crate_folder" => println!("{}", config.bulker.default_crate_folder),
         "default_namespace" => println!("{}", config.bulker.default_namespace),
         "registry_url" => println!("{}", config.bulker.registry_url),
         "shell_path" => println!("{}", config.bulker.shell_path),
@@ -54,7 +53,7 @@ pub fn run(matches: &ArgMatches) -> Result<()> {
                 println!("{}", f);
             }
         }
-        _ => bail!("Unknown config key: '{}'. Supported keys: container_engine, default_crate_folder, default_namespace, registry_url, shell_path, shell_rc, envvars, volumes, shell_prompt, apptainer_image_folder", key),
+        _ => bail!("Unknown config key: '{}'. Supported keys: container_engine, default_namespace, registry_url, shell_path, shell_rc, envvars, volumes, shell_prompt, apptainer_image_folder", key),
     }
 
     Ok(())

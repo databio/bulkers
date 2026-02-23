@@ -10,17 +10,17 @@ use crate::mock;
 use crate::process;
 
 pub fn create_cli() -> Command {
-    Command::new("makemock")
-        .about("Record command outputs for mock replay")
+    Command::new("record")
+        .about("Record container command outputs for mock replay")
         .after_help("\
 EXAMPLES:
-  bulkers makemock databio/pepatac:1.0.13 outputs.json -- python pipeline.py sample1
-  bulkers makemock bulker/demo outputs.json -- cowsay hello
+  bulkers mock record databio/pepatac:1.0.13 outputs.json -- python pipeline.py sample1
+  bulkers mock record bulker/demo outputs.json -- cowsay hello
 
-The makemock subcommand runs a pipeline command with recording shims that capture
+The record subcommand runs a pipeline command with recording shims that capture
 stdout, stderr, return codes, and newly created files for each container command.
 The recordings are appended to the specified outputs.json file for later use with
-'bulkers mock'.")
+'bulkers mock run'.")
         .arg(
             Arg::new("crate_registry_paths")
                 .required(true)
@@ -37,12 +37,6 @@ The recordings are appended to the specified outputs.json file for later use wit
                 .num_args(1..)
                 .trailing_var_arg(true)
                 .help("Command and arguments to run"),
-        )
-        .arg(
-            Arg::new("config")
-                .short('c')
-                .long("config")
-                .help("Bulker configuration file"),
         )
 }
 

@@ -30,7 +30,6 @@ pub fn run(matches: &ArgMatches) -> Result<()> {
 
     match key {
         "container_engine" => config.bulker.container_engine = value.to_string(),
-        "default_crate_folder" => config.bulker.default_crate_folder = value.to_string(),
         "default_namespace" => config.bulker.default_namespace = value.to_string(),
         "registry_url" => config.bulker.registry_url = value.to_string(),
         "shell_path" => config.bulker.shell_path = value.to_string(),
@@ -47,7 +46,7 @@ pub fn run(matches: &ArgMatches) -> Result<()> {
         "apptainer_image_folder" => {
             config.bulker.apptainer_image_folder = if value.is_empty() { None } else { Some(value.to_string()) };
         }
-        _ => bail!("Unknown config key: '{}'. Supported keys: container_engine, default_crate_folder, default_namespace, registry_url, shell_path, shell_rc, envvars, volumes, shell_prompt, apptainer_image_folder", key),
+        _ => bail!("Unknown config key: '{}'. Supported keys: container_engine, default_namespace, registry_url, shell_path, shell_rc, envvars, volumes, shell_prompt, apptainer_image_folder", key),
     }
 
     config.write(&config_path)?;

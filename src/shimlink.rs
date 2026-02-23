@@ -7,7 +7,7 @@
 
 use anyhow::{Context, Result, bail};
 use std::os::unix::process::CommandExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::Ordering;
 
 use crate::config::{BulkerConfig, expand_path, select_config};
@@ -110,7 +110,7 @@ pub fn shimlink_exec(command_name: &str, args: &[String]) -> Result<()> {
         docker_args.push_str(da);
     }
     // Host-tool-specific args from config
-    let tool_extra = host_tool_specific_args(&config, pkg, "docker_args");
+    let tool_extra = config.host_tool_specific_args(pkg, "docker_args");
     if !tool_extra.is_empty() {
         if !docker_args.is_empty() {
             docker_args.push(' ');
@@ -407,6 +407,7 @@ pub fn resolve_arg_paths(args: &[String]) -> (Vec<String>, Vec<String>) {
 
 /// Apply path map translation for bulker-in-docker scenarios.
 /// If the path starts with a known prefix, replace it with the mapped prefix.
+#[allow(dead_code)]
 pub fn apply_path_map(path: &str, path_map: &[(String, String)]) -> String {
     for (from, to) in path_map {
         if path.starts_with(from.as_str()) {
@@ -418,43 +419,14 @@ pub fn apply_path_map(path: &str, path_map: &[(String, String)]) -> String {
 
 // ─── manifest caching ────────────────────────────────────────────────────────
 
-/// Cache a manifest to the crate's installation directory as `manifest.yaml`.
-pub fn cache_manifest(manifest: &Manifest, crate_path: &Path) -> Result<()> {
-    let cache_file = crate_path.join("manifest.yaml");
-    let yaml = serde_yaml::to_string(manifest)
-        .context("Failed to serialize manifest for caching")?;
-    std::fs::write(&cache_file, &yaml)
-        .with_context(|| format!("Failed to write cached manifest: {}", cache_file.display()))?;
-    log::debug!("Cached manifest at: {}", cache_file.display());
-    Ok(())
-}
-
-/// Load a cached manifest from the crate's installation directory.
-pub fn load_cached_manifest(config: &BulkerConfig, cratevars: &CrateVars) -> Result<Manifest> {
-    let entry = config.get_crate_entry(cratevars).ok_or_else(|| {
-        anyhow::anyhow!(
-            "Crate '{}' is not installed. Run 'bulkers crate install' first.",
-            cratevars.display_name()
-        )
-    })?;
-
-    let cache_file = PathBuf::from(&entry.path).join("manifest.yaml");
-    let contents = std::fs::read_to_string(&cache_file).with_context(|| {
-        format!(
-            "Failed to read cached manifest for '{}' at {}. Try reinstalling the crate.",
+/// Load a cached manifest from the manifest cache.
+pub fn load_cached_manifest(_config: &BulkerConfig, cratevars: &CrateVars) -> Result<Manifest> {
+    crate::manifest_cache::load_cached(cratevars)?
+        .ok_or_else(|| anyhow::anyhow!(
+            "Crate '{}' is not cached. Run 'bulkers activate {}' to fetch it.",
             cratevars.display_name(),
-            cache_file.display()
-        )
-    })?;
-
-    let manifest: Manifest = serde_yaml::from_str(&contents).with_context(|| {
-        format!(
-            "Failed to parse cached manifest: {}",
-            cache_file.display()
-        )
-    })?;
-
-    Ok(manifest)
+            cratevars.display_name()
+        ))
 }
 
 // ─── shimlink directory creation ─────────────────────────────────────────────
@@ -516,35 +488,6 @@ pub fn create_shimlink_dir(manifest: &Manifest, dir: &Path) -> Result<()> {
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
-
-/// Look up host-tool-specific arguments from the config's tool_args.
-/// (Duplicated from crate_ops to keep shimlink self-contained.)
-fn host_tool_specific_args(
-    config: &BulkerConfig,
-    pkg: &PackageCommand,
-    arg_key: &str,
-) -> String {
-    let tool_args = match &config.bulker.tool_args {
-        Some(v) => v,
-        None => return String::new(),
-    };
-
-    let (img_ns, img_name, img_tag) = parse_docker_image_path(&pkg.docker_image);
-
-    for tag in &[img_tag.as_str(), "default"] {
-        if let Some(val) = tool_args
-            .get(&img_ns)
-            .and_then(|ns| ns.get(&img_name))
-            .and_then(|img| img.get(*tag))
-            .and_then(|t| t.get(arg_key))
-            .and_then(|v| v.as_str())
-        {
-            return val.to_string();
-        }
-    }
-
-    String::new()
-}
 
 /// Get the current user/group ID by running `id`.
 fn get_id(flag: &str) -> String {
@@ -874,46 +817,6 @@ mod tests {
     }
 
     #[test]
-    fn test_cache_and_load_manifest_roundtrip() {
-        let manifest = Manifest {
-            manifest: ManifestInner {
-                name: Some("test".to_string()),
-                version: Some("1.0".to_string()),
-                commands: vec![PackageCommand {
-                    command: "cowsay".to_string(),
-                    docker_image: "nsheff/cowsay:latest".to_string(),
-                    docker_command: None,
-                    docker_args: None,
-                    dockerargs: None,
-                    apptainer_args: None,
-                    apptainer_command: None,
-                    volumes: vec![],
-                    envvars: vec![],
-                    no_user: false,
-                    no_network: false,
-                    workdir: None,
-                }],
-                host_commands: vec!["ls".to_string()],
-                imports: vec![],
-            },
-        };
-
-        let tmpdir = tempfile::tempdir().unwrap();
-        cache_manifest(&manifest, tmpdir.path()).unwrap();
-
-        // Verify the file exists
-        let cache_file = tmpdir.path().join("manifest.yaml");
-        assert!(cache_file.exists());
-
-        // Read it back
-        let contents = std::fs::read_to_string(&cache_file).unwrap();
-        let loaded: Manifest = serde_yaml::from_str(&contents).unwrap();
-        assert_eq!(loaded.manifest.commands.len(), 1);
-        assert_eq!(loaded.manifest.commands[0].command, "cowsay");
-        assert_eq!(loaded.manifest.host_commands, vec!["ls"]);
-    }
-
-    #[test]
     fn test_create_shimlink_dir() {
         let manifest = Manifest {
             manifest: ManifestInner {
@@ -976,7 +879,6 @@ mod tests {
         BulkerConfig {
             bulker: crate::config::BulkerSettings {
                 container_engine: "docker".to_string(),
-                default_crate_folder: "/tmp/crates".to_string(),
                 default_namespace: "bulker".to_string(),
                 registry_url: "http://hub.bulker.io/".to_string(),
                 shell_path: "/bin/bash".to_string(),
@@ -988,7 +890,6 @@ mod tests {
                 rcfile_strict: "start_strict.sh".to_string(),
                 volumes: vec!["$HOME".to_string()],
                 envvars: vec!["DISPLAY".to_string()],
-                crates: None,
                 tool_args: None,
                 shell_prompt: None,
                 apptainer_image_folder: None,

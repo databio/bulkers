@@ -2,19 +2,18 @@ use anyhow::Result;
 use clap::{Arg, ArgAction, ArgMatches, Command};
 
 use crate::config::{BulkerConfig, select_config};
-use crate::crate_ops::{get_crate_path, load_crate, load_imports};
-use crate::manifest::load_remote_manifest;
+use crate::manifest::{parse_registry_paths, CrateVars, Manifest};
+use crate::manifest_cache;
 
 pub fn create_cli() -> Command {
     Command::new("install")
-        .about("Install a crate from a cratefile")
+        .about("Pre-cache a crate manifest (and optionally pull container images)")
         .after_help("\
 EXAMPLES:
   bulkers crate install bulker/demo
   bulkers crate install databio/pepatac:1.0.13
-  bulkers crate install -f bulker/demo             # overwrite existing
   bulkers crate install -b bulker/demo             # also pull container images
-  bulkers crate install ./manifest.yaml            # install from local file
+  bulkers crate install ./manifest.yaml            # cache from local file
 
 CRATEFILE FORMAT:
   namespace/crate:tag    Registry shorthand (e.g., databio/pepatac:1.0.13)
@@ -27,66 +26,70 @@ CRATEFILE FORMAT:
                 .help("Cratefile: registry shorthand, URL, or local file path"),
         )
         .arg(
-            Arg::new("path")
-                .short('p')
-                .long("path")
-                .help("Custom crate installation path"),
-        )
-        .arg(
             Arg::new("build")
                 .short('b')
                 .long("build")
                 .action(ArgAction::SetTrue)
                 .help("Build/pull container images"),
         )
-        .arg(
-            Arg::new("force")
-                .short('f')
-                .long("force")
-                .action(ArgAction::SetTrue)
-                .help("Overwrite existing crate"),
-        )
+}
+
+/// Detect if the argument is a local file path.
+fn is_local_path(s: &str) -> bool {
+    s.starts_with('.')
+        || s.starts_with('/')
+        || s.ends_with(".yaml")
+        || s.ends_with(".yml")
+}
+
+/// Load a local manifest file and return (CrateVars, Manifest).
+fn load_local_manifest(path: &str) -> Result<(CrateVars, Manifest)> {
+    let file_path = std::path::Path::new(path);
+    let contents = std::fs::read_to_string(file_path)
+        .map_err(|e| anyhow::anyhow!("Failed to read local manifest '{}': {}", path, e))?;
+    let manifest: Manifest = serde_yaml::from_str(&contents)
+        .map_err(|e| anyhow::anyhow!("Failed to parse local manifest '{}': {}", path, e))?;
+
+    let stem = file_path
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "local".to_string());
+    let cv = CrateVars {
+        namespace: "local".to_string(),
+        crate_name: stem,
+        tag: "default".to_string(),
+    };
+
+    Ok((cv, manifest))
 }
 
 pub fn run(matches: &ArgMatches) -> Result<()> {
     let config_path = select_config(matches.get_one::<String>("config").map(|s| s.as_str()))?;
-    let mut config = BulkerConfig::from_file(&config_path)?;
+    let config = BulkerConfig::from_file(&config_path)?;
 
     let cratefile = matches.get_one::<String>("cratefile").unwrap();
     let build = matches.get_flag("build");
-    let force = matches.get_flag("force");
 
-    // Detect if the argument is a local file path or URL vs registry shorthand
-    let (manifest_path, registry_path) = if cratefile.starts_with('.')
-        || cratefile.starts_with('/')
-        || cratefile.starts_with("http://")
-        || cratefile.starts_with("https://")
-    {
-        (Some(cratefile.as_str()), cratefile.as_str())
+    if is_local_path(cratefile) {
+        // Local manifest file
+        let (cv, manifest) = load_local_manifest(cratefile)?;
+        manifest_cache::save_to_cache(&cv, &manifest)?;
+        if build {
+            manifest_cache::pull_images(&config, &manifest)?;
+        }
+        println!("Cached: {}", cv.display_name());
     } else {
-        (None, cratefile.as_str())
-    };
-
-    let (manifest, cratevars) = load_remote_manifest(&config, registry_path, manifest_path)?;
-
-    // Determine crate path
-    let crate_path = if let Some(custom_path) = matches.get_one::<String>("path") {
-        std::path::PathBuf::from(custom_path)
-    } else {
-        get_crate_path(&config, &cratevars)
-    };
-
-    // Handle imports (always recurse)
-    if !manifest.manifest.imports.is_empty() {
-        load_imports(&manifest, &mut config, &config_path, build)?;
+        // Registry path(s)
+        let cratelist = parse_registry_paths(cratefile, &config.bulker.default_namespace);
+        for cv in &cratelist {
+            manifest_cache::ensure_cached_with_imports(&config, cv, true)?;  // always fetch fresh on explicit install
+            if build {
+                let manifest = manifest_cache::load_cached(cv)?.unwrap();
+                manifest_cache::pull_images(&config, &manifest)?;
+            }
+            println!("Cached: {}", cv.display_name());
+        }
     }
 
-    // Load the main crate (imports are stored automatically by load_crate)
-    load_crate(&manifest, &cratevars, &mut config, &crate_path, build, force)?;
-
-    // Write updated config
-    config.write(&config_path)?;
-
-    println!("Installed crate: {}", cratevars.display_name());
     Ok(())
 }

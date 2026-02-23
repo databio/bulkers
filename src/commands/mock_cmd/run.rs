@@ -7,16 +7,16 @@ use crate::manifest::{load_remote_manifest, parse_registry_paths};
 use crate::mock;
 
 pub fn create_cli() -> Command {
-    Command::new("mock")
-        .about("Activate a crate with mock wrappers for CI testing (no containers needed)")
+    Command::new("run")
+        .about("Replay pre-recorded container outputs (no containers needed)")
         .after_help("\
 EXAMPLES:
-  bulkers mock databio/pepatac:1.0.13 outputs.json
-  bulkers mock bulker/demo outputs.json --echo
-  bulkers mock -s bulker/demo outputs.json    # strict: only mock commands in PATH
+  bulkers mock run databio/pepatac:1.0.13 outputs.json
+  bulkers mock run bulker/demo outputs.json --echo
+  bulkers mock run -s bulker/demo outputs.json    # strict: only mock commands in PATH
 
-The mock subcommand loads a crate using pre-recorded outputs from an outputs.json
-file instead of real containers. Use 'bulkers makemock' to create the outputs.json.")
+The run subcommand loads a crate using pre-recorded outputs from an outputs.json
+file instead of real containers. Use 'bulkers mock record' to create the outputs.json.")
         .arg(
             Arg::new("crate_registry_paths")
                 .required(true)
@@ -26,12 +26,6 @@ file instead of real containers. Use 'bulkers makemock' to create the outputs.js
             Arg::new("outputs_json")
                 .required(true)
                 .help("Path to the outputs.json file with recorded command outputs"),
-        )
-        .arg(
-            Arg::new("config")
-                .short('c')
-                .long("config")
-                .help("Bulker configuration file"),
         )
         .arg(
             Arg::new("strict")
@@ -69,7 +63,7 @@ pub fn run(matches: &ArgMatches) -> Result<()> {
 
     if !outputs_abs.exists() {
         anyhow::bail!(
-            "Outputs file not found: {}. Use 'bulkers makemock' to create one.",
+            "Outputs file not found: {}. Use 'bulkers mock record' to create one.",
             outputs_abs.display()
         );
     }

@@ -12,7 +12,8 @@ use crate::shimlink;
 /// Build the new PATH using shimlink directories.
 /// Creates a temp directory with symlinks to the bulkers binary for each command,
 /// then returns the PATH string with the shimlink dir prepended.
-pub fn get_new_path(config: &BulkerConfig, cratelist: &[CrateVars], strict: bool) -> Result<String> {
+/// Auto-fetches manifests from the registry if not cached locally.
+pub fn get_new_path(config: &BulkerConfig, cratelist: &[CrateVars], strict: bool, force: bool) -> Result<String> {
     // Build a stable hash for the crate list so the shimdir is reusable across invocations
     let mut hasher = DefaultHasher::new();
     for cv in cratelist {
@@ -21,7 +22,12 @@ pub fn get_new_path(config: &BulkerConfig, cratelist: &[CrateVars], strict: bool
     let hash = hasher.finish();
     let shimdir = PathBuf::from(format!("/tmp/bulkers_{:016x}", hash));
 
-    // Resolve all crates including imports
+    // Auto-fetch: ensure all manifests (and their imports) are cached
+    for cv in cratelist {
+        crate::manifest_cache::ensure_cached_with_imports(config, cv, force)?;
+    }
+
+    // Resolve all crates including imports (reads from manifest cache, not config)
     let all_cratevars = imports::resolve_cratevars_with_imports(config, cratelist)?;
 
     // Create (or refresh) the shimlink directory
@@ -94,8 +100,9 @@ pub fn activate(
     echo: bool,
     strict: bool,
     prompt: bool,
+    force: bool,
 ) -> Result<()> {
-    let newpath = get_new_path(config, cratelist, strict)?;
+    let newpath = get_new_path(config, cratelist, strict, force)?;
     // Use the first crate's display_name for BULKERCRATE (shimlink needs this to find the manifest)
     let crate_id = cratelist.first()
         .map(|cv| cv.display_name())

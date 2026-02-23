@@ -298,7 +298,6 @@ mod tests {
         crate::config::BulkerConfig {
             bulker: crate::config::BulkerSettings {
                 container_engine: "docker".to_string(),
-                default_crate_folder: "/tmp/crates".to_string(),
                 default_namespace: "bulker".to_string(),
                 registry_url: registry_url.to_string(),
                 shell_path: "/bin/bash".to_string(),
@@ -310,7 +309,6 @@ mod tests {
                 rcfile_strict: "start_strict.sh".to_string(),
                 volumes: vec!["$HOME".to_string()],
                 envvars: vec!["DISPLAY".to_string()],
-                crates: None,
                 tool_args: None,
                 shell_prompt: None,
                 apptainer_image_folder: None,

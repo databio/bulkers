@@ -2,41 +2,13 @@
 //
 // Runtime import resolution for bulker crates. All import-related logic lives here.
 // When activating or exec-ing a crate, this module resolves its imports recursively
-// to build the full PATH, instead of copying shims at install time.
+// to build the full list of CrateVars, reading from the manifest cache.
 
 use anyhow::Result;
 use std::collections::HashSet;
 
-use crate::config::{BulkerConfig, CrateEntry};
+use crate::config::BulkerConfig;
 use crate::manifest::{CrateVars, parse_registry_path};
-
-/// Look up a crate entry by its registry path components.
-pub fn get_crate_entry<'a>(config: &'a BulkerConfig, cratevars: &CrateVars) -> Option<&'a CrateEntry> {
-    config.get_crate_entry(cratevars)
-}
-
-/// Build a PATH string that includes the crate's own path plus all imported crate paths (recursively).
-pub fn resolve_paths_with_imports(
-    config: &BulkerConfig,
-    cratelist: &[CrateVars],
-    strict: bool,
-) -> Result<String> {
-    let mut all_paths = Vec::new();
-    let mut visited = HashSet::new();
-
-    for cv in cratelist {
-        resolve_crate_paths(config, cv, &mut all_paths, &mut visited)?;
-    }
-
-    let crate_path_str = all_paths.join(":");
-
-    if strict {
-        Ok(crate_path_str)
-    } else {
-        let current_path = std::env::var("PATH").unwrap_or_default();
-        Ok(format!("{}:{}", crate_path_str, current_path))
-    }
-}
 
 /// Resolve all CrateVars (including imports) for a list of crates.
 /// Returns a flat list of all CrateVars in dependency order.
@@ -55,6 +27,7 @@ pub fn resolve_cratevars_with_imports(
 }
 
 /// Recursively collect CrateVars for a crate and all its imports.
+/// Reads import lists from cached manifests (not from config crates map).
 fn resolve_crate_vars(
     config: &BulkerConfig,
     cratevars: &CrateVars,
@@ -67,9 +40,10 @@ fn resolve_crate_vars(
     }
     visited.insert(key.clone());
 
-    let entry = get_crate_entry(config, cratevars)
+    // Load imports from the cached manifest (not from config crates map)
+    let manifest = crate::manifest_cache::load_cached(cratevars)?
         .ok_or_else(|| anyhow::anyhow!(
-            "Crate '{}' is not installed. Run 'bulkers crate list' to see installed crates, or 'bulkers crate install' to add one.",
+            "Crate '{}' is not cached. Run 'bulkers activate' to fetch it.",
             key
         ))?;
 
@@ -79,54 +53,23 @@ fn resolve_crate_vars(
         tag: cratevars.tag.clone(),
     });
 
-    for import_path in &entry.imports {
+    for import_path in &manifest.manifest.imports {
         let import_cv = parse_registry_path(import_path, &config.bulker.default_namespace);
         resolve_crate_vars(config, &import_cv, vars, visited)?;
     }
-
-    Ok(())
-}
-
-/// Recursively resolve a crate's path and all its import paths (depth-first).
-fn resolve_crate_paths(
-    config: &BulkerConfig,
-    cratevars: &CrateVars,
-    paths: &mut Vec<String>,
-    visited: &mut HashSet<String>,
-) -> Result<()> {
-    let key = cratevars.display_name();
-    if visited.contains(&key) {
-        return Ok(());
-    }
-    visited.insert(key.clone());
-
-    let entry = get_crate_entry(config, cratevars)
-        .ok_or_else(|| anyhow::anyhow!(
-            "Crate '{}' is not installed. Run 'bulkers crate list' to see installed crates, or 'bulkers crate install' to add one.",
-            key
-        ))?;
-
-    paths.push(entry.path.clone());
-
-    for import_path in &entry.imports {
-        let import_cv = parse_registry_path(import_path, &config.bulker.default_namespace);
-        resolve_crate_paths(config, &import_cv, paths, visited)?;
-    }
-
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeMap;
+    use crate::manifest::{Manifest, ManifestInner, PackageCommand};
 
     /// Helper to build a minimal BulkerConfig for tests.
     fn make_test_config() -> BulkerConfig {
         BulkerConfig {
             bulker: crate::config::BulkerSettings {
                 container_engine: "docker".to_string(),
-                default_crate_folder: "/tmp/crates".to_string(),
                 default_namespace: "bulker".to_string(),
                 registry_url: "http://hub.bulker.io/".to_string(),
                 shell_path: "/bin/bash".to_string(),
@@ -138,7 +81,6 @@ mod tests {
                 rcfile_strict: "start_strict.sh".to_string(),
                 volumes: vec!["$HOME".to_string()],
                 envvars: vec!["DISPLAY".to_string()],
-                crates: None,
                 tool_args: None,
                 shell_prompt: None,
                 apptainer_image_folder: None,
@@ -151,130 +93,62 @@ mod tests {
         let config = make_test_config();
         let cv = CrateVars {
             namespace: "bulker".to_string(),
-            crate_name: "nonexistent".to_string(),
+            crate_name: "nonexistent_xyz_test".to_string(),
             tag: "default".to_string(),
         };
-        let result = resolve_paths_with_imports(&config, &[cv], false);
+        let result = resolve_cratevars_with_imports(&config, &[cv]);
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("not installed"));
-        assert!(err.contains("bulkers crate list"));
+        assert!(err.contains("not cached"));
     }
 
     #[test]
-    fn test_resolve_single_crate_no_imports() {
-        let mut config = make_test_config();
-        let mut ns = BTreeMap::new();
-        let mut crate_map = BTreeMap::new();
-        crate_map.insert("default".to_string(), CrateEntry {
-            path: "/tmp/crates/bulker/demo/default".to_string(),
-            imports: Vec::new(),
-        });
-        ns.insert("demo".to_string(), crate_map);
-        config.bulker.crates = Some(BTreeMap::from([("bulker".to_string(), ns)]));
+    fn test_resolve_single_crate_from_cache() {
+        // Set up temp XDG dir for test isolation
+        let tmpdir = tempfile::tempdir().unwrap();
+        let old_val = std::env::var("XDG_CONFIG_HOME").ok();
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", tmpdir.path()); }
 
+        let config = make_test_config();
         let cv = CrateVars {
-            namespace: "bulker".to_string(),
+            namespace: "test_imports".to_string(),
             crate_name: "demo".to_string(),
             tag: "default".to_string(),
         };
-        let result = resolve_paths_with_imports(&config, &[cv], true).unwrap();
-        assert_eq!(result, "/tmp/crates/bulker/demo/default");
-    }
 
-    #[test]
-    fn test_resolve_crate_with_imports() {
-        let mut config = make_test_config();
-
-        // Parent crate with one import
-        let parent_entry = CrateEntry {
-            path: "/tmp/crates/bulker/parent/default".to_string(),
-            imports: vec!["bulker/child".to_string()],
+        // Cache a manifest
+        let manifest = Manifest {
+            manifest: ManifestInner {
+                name: Some("demo".to_string()),
+                version: None,
+                commands: vec![PackageCommand {
+                    command: "cowsay".to_string(),
+                    docker_image: "nsheff/cowsay:latest".to_string(),
+                    docker_command: None,
+                    docker_args: None,
+                    dockerargs: None,
+                    apptainer_args: None,
+                    apptainer_command: None,
+                    volumes: vec![],
+                    envvars: vec![],
+                    no_user: false,
+                    no_network: false,
+                    workdir: None,
+                }],
+                host_commands: vec![],
+                imports: vec![],
+            },
         };
-        let child_entry = CrateEntry {
-            path: "/tmp/crates/bulker/child/default".to_string(),
-            imports: Vec::new(),
-        };
+        crate::manifest_cache::save_to_cache(&cv, &manifest).unwrap();
 
-        let mut parent_tags = BTreeMap::new();
-        parent_tags.insert("default".to_string(), parent_entry);
-        let mut child_tags = BTreeMap::new();
-        child_tags.insert("default".to_string(), child_entry);
+        let result = resolve_cratevars_with_imports(&config, &[cv]).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].crate_name, "demo");
 
-        let mut ns = BTreeMap::new();
-        ns.insert("parent".to_string(), parent_tags);
-        ns.insert("child".to_string(), child_tags);
-
-        config.bulker.crates = Some(BTreeMap::from([("bulker".to_string(), ns)]));
-
-        let cv = CrateVars {
-            namespace: "bulker".to_string(),
-            crate_name: "parent".to_string(),
-            tag: "default".to_string(),
-        };
-        let result = resolve_paths_with_imports(&config, &[cv], true).unwrap();
-        assert_eq!(
-            result,
-            "/tmp/crates/bulker/parent/default:/tmp/crates/bulker/child/default"
-        );
-    }
-
-    #[test]
-    fn test_resolve_circular_imports_handled() {
-        let mut config = make_test_config();
-
-        // Two crates that import each other
-        let a_entry = CrateEntry {
-            path: "/tmp/crates/bulker/a/default".to_string(),
-            imports: vec!["bulker/b".to_string()],
-        };
-        let b_entry = CrateEntry {
-            path: "/tmp/crates/bulker/b/default".to_string(),
-            imports: vec!["bulker/a".to_string()],
-        };
-
-        let mut a_tags = BTreeMap::new();
-        a_tags.insert("default".to_string(), a_entry);
-        let mut b_tags = BTreeMap::new();
-        b_tags.insert("default".to_string(), b_entry);
-
-        let mut ns = BTreeMap::new();
-        ns.insert("a".to_string(), a_tags);
-        ns.insert("b".to_string(), b_tags);
-
-        config.bulker.crates = Some(BTreeMap::from([("bulker".to_string(), ns)]));
-
-        let cv = CrateVars {
-            namespace: "bulker".to_string(),
-            crate_name: "a".to_string(),
-            tag: "default".to_string(),
-        };
-        // Should not infinite-loop; visited set breaks the cycle
-        let result = resolve_paths_with_imports(&config, &[cv], true).unwrap();
-        assert_eq!(
-            result,
-            "/tmp/crates/bulker/a/default:/tmp/crates/bulker/b/default"
-        );
-    }
-
-    #[test]
-    fn test_resolve_non_strict_appends_existing_path() {
-        let mut config = make_test_config();
-        let mut ns = BTreeMap::new();
-        let mut crate_map = BTreeMap::new();
-        crate_map.insert("default".to_string(), CrateEntry {
-            path: "/tmp/crates/bulker/demo/default".to_string(),
-            imports: Vec::new(),
-        });
-        ns.insert("demo".to_string(), crate_map);
-        config.bulker.crates = Some(BTreeMap::from([("bulker".to_string(), ns)]));
-
-        let cv = CrateVars {
-            namespace: "bulker".to_string(),
-            crate_name: "demo".to_string(),
-            tag: "default".to_string(),
-        };
-        let result = resolve_paths_with_imports(&config, &[cv], false).unwrap();
-        assert!(result.starts_with("/tmp/crates/bulker/demo/default:"));
+        // Restore env
+        match old_val {
+            Some(v) => unsafe { std::env::set_var("XDG_CONFIG_HOME", v); },
+            None => unsafe { std::env::remove_var("XDG_CONFIG_HOME"); },
+        }
     }
 }
