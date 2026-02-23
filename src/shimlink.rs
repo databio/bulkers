@@ -47,23 +47,9 @@ pub fn shimlink_exec(command_name: &str, args: &[String]) -> Result<()> {
     let config_path = select_config(None)?;
     let config = BulkerConfig::from_file(&config_path)?;
 
-    // 2. Load cached manifest for the crate
+    // 2. Find command in crate manifest or its imports
     let cratevars = parse_registry_path(&crate_id, &config.bulker.default_namespace);
-    let manifest = load_cached_manifest(&config, &cratevars)?;
-
-    // 3. Find command in manifest
-    let pkg = manifest
-        .manifest
-        .commands
-        .iter()
-        .find(|c| c.command == actual_command)
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "Command '{}' not found in crate '{}'",
-                actual_command,
-                crate_id
-            )
-        })?;
+    let pkg = find_command_in_crate_with_imports(&config, &cratevars, actual_command)?;
 
     // 4. Resolve argument paths and auto-mount directories
     let (resolved_args, auto_mount_dirs) = resolve_arg_paths(args);
@@ -110,7 +96,7 @@ pub fn shimlink_exec(command_name: &str, args: &[String]) -> Result<()> {
         docker_args.push_str(da);
     }
     // Host-tool-specific args from config
-    let tool_extra = config.host_tool_specific_args(pkg, "docker_args");
+    let tool_extra = config.host_tool_specific_args(&pkg, "docker_args");
     if !tool_extra.is_empty() {
         if !docker_args.is_empty() {
             docker_args.push(' ');
@@ -133,7 +119,7 @@ pub fn shimlink_exec(command_name: &str, args: &[String]) -> Result<()> {
     let cmd_vec = if is_apptainer {
         build_apptainer_command(
             &config,
-            pkg,
+            &pkg,
             &volumes,
             &envvars,
             &resolved_args,
@@ -142,7 +128,7 @@ pub fn shimlink_exec(command_name: &str, args: &[String]) -> Result<()> {
     } else {
         build_docker_command(
             &config,
-            pkg,
+            &pkg,
             &volumes,
             &envvars,
             &docker_args,
@@ -415,6 +401,31 @@ pub fn apply_path_map(path: &str, path_map: &[(String, String)]) -> String {
         }
     }
     path.to_string()
+}
+
+// ─── command lookup with imports ─────────────────────────────────────────────
+
+/// Find a command by searching the primary crate manifest and all its imports.
+fn find_command_in_crate_with_imports(
+    config: &BulkerConfig,
+    primary_cv: &CrateVars,
+    command_name: &str,
+) -> Result<PackageCommand> {
+    let all_crates = crate::imports::resolve_cratevars_with_imports(config, &[primary_cv.clone()])?;
+
+    for cv in &all_crates {
+        if let Some(manifest) = crate::manifest_cache::load_cached(cv)? {
+            if let Some(pkg) = manifest.manifest.commands.iter().find(|c| c.command == command_name) {
+                return Ok(pkg.clone());
+            }
+        }
+    }
+
+    bail!(
+        "Command '{}' not found in crate '{}' or its imports",
+        command_name,
+        primary_cv.display_name()
+    )
 }
 
 // ─── manifest caching ────────────────────────────────────────────────────────
@@ -872,6 +883,89 @@ mod tests {
         assert!(shimdir.join("bcftools").is_symlink());
         assert!(shimdir.join("_samtools").is_symlink());
         assert!(shimdir.join("_bcftools").is_symlink());
+    }
+
+    /// Helper to build a PackageCommand with default fields.
+    fn make_empty_pkg() -> PackageCommand {
+        PackageCommand {
+            command: String::new(),
+            docker_image: String::new(),
+            docker_command: None,
+            docker_args: None,
+            dockerargs: None,
+            apptainer_args: None,
+            apptainer_command: None,
+            volumes: vec![],
+            envvars: vec![],
+            no_user: false,
+            no_network: false,
+            workdir: None,
+        }
+    }
+
+    #[test]
+    fn test_find_command_in_imported_crate() {
+        let tmpdir = tempfile::tempdir().unwrap();
+        let old_val = std::env::var("XDG_CONFIG_HOME").ok();
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", tmpdir.path()); }
+
+        let config = make_test_config();
+
+        // Child crate: bulker/coreutils_shimtest with "cat" command
+        let child_cv = CrateVars {
+            namespace: "bulker".to_string(),
+            crate_name: "coreutils_shimtest".to_string(),
+            tag: "default".to_string(),
+        };
+        let child_manifest = Manifest {
+            manifest: ManifestInner {
+                name: Some("coreutils".to_string()),
+                version: None,
+                commands: vec![PackageCommand {
+                    command: "cat".to_string(),
+                    docker_image: "alpine:latest".to_string(),
+                    ..make_empty_pkg()
+                }],
+                host_commands: vec![],
+                imports: vec![],
+            },
+        };
+        crate::manifest_cache::save_to_cache(&child_cv, &child_manifest).unwrap();
+
+        // Parent crate: test/parent_shimtest that imports bulker/coreutils_shimtest
+        let parent_cv = CrateVars {
+            namespace: "test".to_string(),
+            crate_name: "parent_shimtest".to_string(),
+            tag: "default".to_string(),
+        };
+        let parent_manifest = Manifest {
+            manifest: ManifestInner {
+                name: Some("parent".to_string()),
+                version: None,
+                commands: vec![PackageCommand {
+                    command: "samtools".to_string(),
+                    docker_image: "samtools:latest".to_string(),
+                    ..make_empty_pkg()
+                }],
+                host_commands: vec![],
+                imports: vec!["bulker/coreutils_shimtest:default".to_string()],
+            },
+        };
+        crate::manifest_cache::save_to_cache(&parent_cv, &parent_manifest).unwrap();
+
+        // Look up "cat" starting from the parent crate — should find it in the import
+        let pkg = find_command_in_crate_with_imports(&config, &parent_cv, "cat").unwrap();
+        assert_eq!(pkg.command, "cat");
+
+        // Also verify "samtools" is found in the primary crate
+        let pkg2 = find_command_in_crate_with_imports(&config, &parent_cv, "samtools").unwrap();
+        assert_eq!(pkg2.command, "samtools");
+
+        // Restore env
+        match old_val {
+            Some(v) => unsafe { std::env::set_var("XDG_CONFIG_HOME", v); },
+            None => unsafe { std::env::remove_var("XDG_CONFIG_HOME"); },
+        }
     }
 
     /// Helper to build a minimal BulkerConfig for tests.
