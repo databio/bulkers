@@ -1,23 +1,57 @@
 use anyhow::{Result, bail};
+use std::collections::HashSet;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 
 use crate::config::BulkerConfig;
 use crate::crate_ops::get_local_path;
-use crate::manifest::CrateVars;
+use crate::manifest::{CrateVars, parse_registry_path};
 
-/// Build the new PATH from a list of crates.
-pub fn get_new_path(config: &BulkerConfig, cratelist: &[CrateVars], strict: bool) -> Result<String> {
-    let mut crate_paths = Vec::new();
-    for cv in cratelist {
-        let path = get_local_path(config, cv);
-        match path {
-            Some(p) => crate_paths.push(p),
-            None => bail!("Crate '{}' is not loaded. Run 'bulkers list' to see loaded crates, or 'bulkers load' to add one.", cv.display_name()),
+/// Resolve a crate's path and all its imports recursively (depth-first).
+fn resolve_crate_paths(
+    config: &BulkerConfig,
+    cratevars: &CrateVars,
+    visited: &mut HashSet<String>,
+) -> Result<Vec<String>> {
+    let display = cratevars.display_name();
+    if visited.contains(&display) {
+        return Ok(Vec::new());
+    }
+    visited.insert(display.clone());
+
+    let mut paths = Vec::new();
+
+    // Add the crate's own path first
+    let path = get_local_path(config, cratevars)
+        .ok_or_else(|| anyhow::anyhow!(
+            "Crate '{}' is not installed. Run 'bulkers crate list' to see installed crates, or 'bulkers crate install' to add one.",
+            display
+        ))?;
+    paths.push(path);
+
+    // Resolve imports recursively
+    if let Some(entry) = config.get_crate_entry(cratevars) {
+        for import in &entry.imports {
+            let import_cv = parse_registry_path(import, &config.bulker.default_namespace);
+            let import_paths = resolve_crate_paths(config, &import_cv, visited)?;
+            paths.extend(import_paths);
         }
     }
 
-    let crate_path_str = crate_paths.join(":");
+    Ok(paths)
+}
+
+/// Build the new PATH from a list of crates, resolving imports.
+pub fn get_new_path(config: &BulkerConfig, cratelist: &[CrateVars], strict: bool) -> Result<String> {
+    let mut all_paths = Vec::new();
+    let mut visited = HashSet::new();
+
+    for cv in cratelist {
+        let paths = resolve_crate_paths(config, cv, &mut visited)?;
+        all_paths.extend(paths);
+    }
+
+    let crate_path_str = all_paths.join(":");
 
     if strict {
         Ok(crate_path_str)
@@ -199,8 +233,6 @@ mod tests {
 
     #[test]
     fn test_config_templates_dir_resolves_relative_to_config_file() {
-        // Bug regression: config_templates_dir used to hardcode ~/.config/bulker/templates/
-        // instead of resolving relative to the actual config file location.
         let config_path = Path::new("/some/custom/path/bulker_config.yaml");
         let result = config_templates_dir(config_path);
         assert_eq!(result, PathBuf::from("/some/custom/path"));
@@ -208,7 +240,6 @@ mod tests {
 
     #[test]
     fn test_config_templates_dir_rcfile_joins_correctly() {
-        // The rcfile "templates/start.sh" should resolve to the config's parent + rcfile
         let config_path = Path::new("/home/user/Dropbox/env/bulker_config/zither.yaml");
         let dir = config_templates_dir(config_path);
         let rcfile_path = dir.join("templates/start.sh");

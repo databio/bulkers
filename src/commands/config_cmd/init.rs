@@ -10,15 +10,9 @@ pub fn create_cli() -> Command {
         .about("Initialize a new bulker configuration")
         .after_help("\
 EXAMPLES:
-  bulkers init -c ~/.config/bulker/bulker_config.yaml
-  bulkers init -c ~/bulker_config.yaml -e singularity")
-        .arg(
-            Arg::new("config")
-                .short('c')
-                .long("config")
-                .required(true)
-                .help("Path to create the configuration file"),
-        )
+  bulkers config init
+  bulkers config init -c ~/.config/bulker/bulker_config.yaml
+  bulkers config init -c ~/bulker_config.yaml -e singularity")
         .arg(
             Arg::new("engine")
                 .short('e')
@@ -29,9 +23,11 @@ EXAMPLES:
 }
 
 pub fn run(matches: &ArgMatches) -> Result<()> {
-    let config_path = PathBuf::from(expand_path(
-        matches.get_one::<String>("config").unwrap(),
-    ));
+    let config_path = if let Some(c) = matches.get_one::<String>("config") {
+        PathBuf::from(expand_path(c))
+    } else {
+        crate::config::default_config_path()
+    };
 
     // Check if config already exists
     if config_path.exists() {

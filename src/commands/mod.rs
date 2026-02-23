@@ -1,9 +1,4 @@
 pub mod activate;
-pub mod envvars;
-pub mod init;
-pub mod inspect;
-pub mod list;
-pub mod load;
-pub mod reload;
-pub mod run;
-pub mod unload;
+pub mod config_cmd;
+pub mod crate_cmd;
+pub mod exec;

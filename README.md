@@ -2,10 +2,6 @@
 
 Multi-container environment manager.
 
-Port from python to rust. 
-
-Alpha testing.
-
 ## Install
 
 ```bash
@@ -37,12 +33,19 @@ bulkers() {
   case "$1" in
     activate)
       shift
-      eval "$(\command bulkers activate -e "$@")"
+      _BULKER_OLD_PS1="$PS1"
+      eval "$(\command bulkers activate --echo "$@")"
+      if [ -n "$BULKERCRATE" ]; then
+        PS1="(\[\033[01;93m\]${BULKERCRATE}\[\033[00m\]) ${_BULKER_OLD_PS1}"
+      fi
       ;;
     deactivate)
       if [ -n "$BULKER_ORIG_PATH" ]; then
         export PATH="$BULKER_ORIG_PATH"
-        unset BULKERCRATE BULKERPATH BULKERPROMPT BULKERSHELLRC BULKER_ORIG_PATH
+        if [ -n "$_BULKER_OLD_PS1" ]; then
+          PS1="$_BULKER_OLD_PS1"
+        fi
+        unset BULKERCRATE BULKERPATH BULKERPROMPT BULKERSHELLRC BULKER_ORIG_PATH _BULKER_OLD_PS1
       fi
       ;;
     *)
@@ -54,6 +57,64 @@ bulkers() {
 ```
 
 Or build from source: `cargo install --path .`
+
+## Usage
+
+Bulkers organizes commands into three groups:
+
+### Daily use (top-level)
+
+```bash
+bulkers activate <crate>           # shell function: put crate commands on PATH
+bulkers deactivate                 # shell function: restore original PATH
+bulkers exec <crate> -- <cmd>      # run one command in a crate environment
+```
+
+### Crate management
+
+```bash
+bulkers crate install <cratefile>  # install from registry shorthand, URL, or local file
+bulkers crate uninstall <name>     # remove crate from disk and config
+bulkers crate update [name]        # re-fetch and rebuild crate(s)
+bulkers crate list                 # list installed crates
+bulkers crate inspect <name>       # show commands available in a crate
+```
+
+### Configuration
+
+```bash
+bulkers config init                # create new config file
+bulkers config show                # print current config
+bulkers config get <key>           # get a config value
+bulkers config set <key>=<value>   # set a config value
+```
+
+## Crate format reference
+
+```
+namespace/crate:tag    Full path (e.g., databio/pepatac:1.0.13)
+crate                  Uses default namespace "bulker", tag "default"
+crate1,crate2          Activate multiple crates together
+./path/to/file.yaml    Local cratefile
+https://url/file.yaml  Remote cratefile
+```
+
+## Imports
+
+Cratefiles can import other crates. Imports are resolved at runtime (activate/exec time), not install time. This means updating an imported crate automatically propagates to all crates that import it.
+
+```yaml
+manifest:
+  name: my-pipeline
+  imports:
+  - bulker/samtools
+  - bulker/bedtools
+  commands:
+  - command: my-tool
+    docker_image: my-org/my-tool:latest
+```
+
+When you `bulkers activate` a crate with imports, the imported crate commands are automatically added to PATH.
 
 ## AI-friendly use
 

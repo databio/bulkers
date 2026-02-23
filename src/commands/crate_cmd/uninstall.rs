@@ -6,22 +6,16 @@ use crate::crate_ops::unload_crate;
 use crate::manifest::parse_registry_paths;
 
 pub fn create_cli() -> Command {
-    Command::new("unload")
-        .about("Remove a loaded crate from disk and config")
+    Command::new("uninstall")
+        .about("Remove an installed crate from disk and config")
         .after_help("\
 EXAMPLES:
-  bulkers unload bulker/demo
-  bulkers unload databio/pepatac:1.0.13")
+  bulkers crate uninstall bulker/demo
+  bulkers crate uninstall databio/pepatac:1.0.13")
         .arg(
             Arg::new("crate_registry_paths")
                 .required(true)
                 .help("Crate to remove, e.g. bulker/demo or namespace/crate:tag"),
-        )
-        .arg(
-            Arg::new("config")
-                .short('c')
-                .long("config")
-                .help("Bulker configuration file"),
         )
 }
 
@@ -34,7 +28,7 @@ pub fn run(matches: &ArgMatches) -> Result<()> {
 
     for cratevars in &cratelist {
         unload_crate(&mut config, cratevars)?;
-        println!("Unloaded: {}", cratevars.display_name());
+        println!("Uninstalled: {}", cratevars.display_name());
     }
 
     config.write(&config_path)?;

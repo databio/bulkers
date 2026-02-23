@@ -61,7 +61,7 @@ bulkers() {
     activate)
       shift
       _BULKER_OLD_PS1="$PS1"
-      eval "$(\command bulkers activate -e "$@")"
+      eval "$(\command bulkers activate --echo "$@")"
       if [ -n "$BULKERCRATE" ]; then
         PS1="(\[\033[01;93m\]${BULKERCRATE}\[\033[00m\]) ${_BULKER_OLD_PS1}"
       fi

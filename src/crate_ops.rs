@@ -2,7 +2,7 @@ use anyhow::{Context, Result, bail};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
-use crate::config::{BulkerConfig, mkabs};
+use crate::config::{BulkerConfig, CrateEntry, mkabs};
 use crate::manifest::{
     CrateVars, Manifest, PackageCommand, load_remote_manifest, parse_docker_image_path,
 };
@@ -22,7 +22,7 @@ pub fn get_local_path(config: &BulkerConfig, cratevars: &CrateVars) -> Option<St
         .get(&cratevars.namespace)?
         .get(&cratevars.crate_name)?
         .get(&cratevars.tag)
-        .cloned()
+        .map(|entry| entry.path.clone())
 }
 
 /// Look up host-tool-specific arguments from the config's tool_args.
@@ -70,7 +70,7 @@ pub fn load_crate(
     if let Some(existing) = get_local_path(config, cratevars) {
         if Path::new(&existing).exists() && !force {
             bail!(
-                "Crate '{}' already loaded at {}. Use --force to overwrite.",
+                "Crate '{}' already installed at {}. Use --force to overwrite.",
                 cratevars.display_name(),
                 existing
             );
@@ -226,10 +226,13 @@ pub fn load_crate(
         .or_default()
         .entry(cratevars.crate_name.clone())
         .or_default()
-        .insert(cratevars.tag.clone(), crate_path_str);
+        .insert(cratevars.tag.clone(), CrateEntry {
+            path: crate_path_str,
+            imports: Vec::new(),
+        });
 
     log::info!(
-        "Loaded crate '{}' with {} commands at {}",
+        "Installed crate '{}' with {} commands at {}",
         cratevars.display_name(),
         commands_created,
         crate_path.display()
@@ -238,16 +241,15 @@ pub fn load_crate(
     Ok(())
 }
 
-/// Handle recursive imports from a manifest.
+/// Handle imports from a manifest. Always recurses.
 pub fn load_imports(
     manifest: &Manifest,
     config: &mut BulkerConfig,
     config_path: &Path,
     build: bool,
-    recurse: bool,
 ) -> Result<()> {
     for import_path in &manifest.manifest.imports {
-        log::info!("Loading import: {}", import_path);
+        log::info!("Installing import: {}", import_path);
 
         let (import_manifest, import_cratevars) =
             load_remote_manifest(config, import_path, None)?;
@@ -255,8 +257,8 @@ pub fn load_imports(
         let import_crate_path = get_crate_path(config, &import_cratevars);
 
         // Recursively handle imports first
-        if recurse && !import_manifest.manifest.imports.is_empty() {
-            load_imports(&import_manifest, config, config_path, build, recurse)?;
+        if !import_manifest.manifest.imports.is_empty() {
+            load_imports(&import_manifest, config, config_path, build)?;
         }
 
         load_crate(
@@ -268,8 +270,12 @@ pub fn load_imports(
             true, // force for imports
         )?;
 
-        // Copy imported crate contents into parent
-        // (this matches the Python behavior of copying import files into the main crate)
+        // Store import references
+        if !import_manifest.manifest.imports.is_empty() {
+            if let Some(entry) = config.get_crate_entry_mut(&import_cratevars) {
+                entry.imports = import_manifest.manifest.imports.clone();
+            }
+        }
     }
     Ok(())
 }
@@ -310,6 +316,6 @@ pub fn unload_crate(config: &mut BulkerConfig, cratevars: &CrateVars) -> Result<
         }
     }
 
-    log::info!("Unloaded crate: {}", cratevars.display_name());
+    log::info!("Uninstalled crate: {}", cratevars.display_name());
     Ok(())
 }

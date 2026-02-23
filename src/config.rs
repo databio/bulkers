@@ -3,7 +3,16 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use crate::manifest::CrateVars;
+
 const BULKERCFG_ENV: &str = "BULKERCFG";
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CrateEntry {
+    pub path: String,
+    #[serde(default)]
+    pub imports: Vec<String>,
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BulkerConfig {
@@ -30,7 +39,7 @@ pub struct BulkerSettings {
     #[serde(default = "default_envvars")]
     pub envvars: Vec<String>,
     #[serde(default)]
-    pub crates: Option<BTreeMap<String, BTreeMap<String, BTreeMap<String, String>>>>,
+    pub crates: Option<BTreeMap<String, BTreeMap<String, BTreeMap<String, CrateEntry>>>>,
     #[serde(default)]
     pub tool_args: Option<serde_yaml::Value>,
     #[serde(default)]
@@ -82,15 +91,31 @@ impl BulkerConfig {
     }
 
     /// Get or initialize the crates map, returning a mutable reference.
-    pub fn crates_mut(&mut self) -> &mut BTreeMap<String, BTreeMap<String, BTreeMap<String, String>>> {
+    pub fn crates_mut(&mut self) -> &mut BTreeMap<String, BTreeMap<String, BTreeMap<String, CrateEntry>>> {
         self.bulker.crates.get_or_insert_with(BTreeMap::new)
     }
 
     /// Get a reference to the crates map (empty if None).
-    pub fn crates(&self) -> &BTreeMap<String, BTreeMap<String, BTreeMap<String, String>>> {
-        static EMPTY: std::sync::LazyLock<BTreeMap<String, BTreeMap<String, BTreeMap<String, String>>>> =
+    pub fn crates(&self) -> &BTreeMap<String, BTreeMap<String, BTreeMap<String, CrateEntry>>> {
+        static EMPTY: std::sync::LazyLock<BTreeMap<String, BTreeMap<String, BTreeMap<String, CrateEntry>>>> =
             std::sync::LazyLock::new(BTreeMap::new);
         self.bulker.crates.as_ref().unwrap_or(&EMPTY)
+    }
+
+    /// Get a CrateEntry by cratevars.
+    pub fn get_crate_entry(&self, cratevars: &CrateVars) -> Option<&CrateEntry> {
+        self.crates()
+            .get(&cratevars.namespace)?
+            .get(&cratevars.crate_name)?
+            .get(&cratevars.tag)
+    }
+
+    /// Get a mutable CrateEntry by cratevars.
+    pub fn get_crate_entry_mut(&mut self, cratevars: &CrateVars) -> Option<&mut CrateEntry> {
+        self.crates_mut()
+            .get_mut(&cratevars.namespace)?
+            .get_mut(&cratevars.crate_name)?
+            .get_mut(&cratevars.tag)
     }
 }
 
@@ -118,7 +143,7 @@ pub fn select_config(arg: Option<&str>) -> Result<PathBuf> {
     }
 
     bail!(
-        "No bulker config found. Set ${}, pass -c, or run `bulkers init`.",
+        "No bulker config found. Set ${}, pass -c, or run `bulkers config init`.",
         BULKERCFG_ENV
     )
 }

@@ -1,24 +1,17 @@
 use anyhow::Result;
-use clap::{Arg, ArgAction, ArgMatches, Command};
+use clap::{ArgAction, ArgMatches, Command};
 
 use crate::config::{BulkerConfig, select_config};
 
 pub fn create_cli() -> Command {
     Command::new("list")
-        .about("List loaded crates")
+        .about("List installed crates")
         .after_help("\
 EXAMPLES:
-  bulkers list
-  bulkers list -s                         # simple format for scripting")
+  bulkers crate list
+  bulkers crate list --simple                   # simple format for scripting")
         .arg(
-            Arg::new("config")
-                .short('c')
-                .long("config")
-                .help("Bulker configuration file"),
-        )
-        .arg(
-            Arg::new("simple")
-                .short('s')
+            clap::Arg::new("simple")
                 .long("simple")
                 .action(ArgAction::SetTrue)
                 .help("Simple output format (space-separated)"),
@@ -33,25 +26,33 @@ pub fn run(matches: &ArgMatches) -> Result<()> {
     let crates = config.crates();
 
     if crates.is_empty() {
-        println!("No crates loaded.");
+        println!("No crates installed.");
         return Ok(());
     }
 
     let mut entries = Vec::new();
     for (namespace, crate_map) in crates {
         for (crate_name, tag_map) in crate_map {
-            for (tag, path) in tag_map {
-                entries.push((format!("{}/{}:{}", namespace, crate_name, tag), path.clone()));
+            for (tag, entry) in tag_map {
+                entries.push((
+                    format!("{}/{}:{}", namespace, crate_name, tag),
+                    entry.path.clone(),
+                    entry.imports.clone(),
+                ));
             }
         }
     }
 
     if simple {
-        let names: Vec<&str> = entries.iter().map(|(n, _)| n.as_str()).collect();
+        let names: Vec<&str> = entries.iter().map(|(n, _, _)| n.as_str()).collect();
         println!("{}", names.join(" "));
     } else {
-        for (name, path) in &entries {
-            println!("{} -- {}", name, path);
+        for (name, path, imports) in &entries {
+            if imports.is_empty() {
+                println!("{} -- {}", name, path);
+            } else {
+                println!("{} -- {} (imports: {})", name, path, imports.join(", "));
+            }
         }
     }
 

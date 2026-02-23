@@ -6,19 +6,24 @@ use crate::manifest::parse_registry_paths;
 
 pub fn create_cli() -> Command {
     Command::new("activate")
-        .about("Start a new shell with crate commands in PATH")
+        .about("Put crate commands on PATH")
         .after_help("\
 EXAMPLES:
   bulkers activate bulker/demo
   bulkers activate databio/pepatac:1.0.13
-  bulkers activate bulker/demo,bulker/pi    # multiple crates
-  bulkers activate demo                     # uses default namespace
-  bulkers activate -s bulker/demo           # strict: only crate commands in PATH
-  bulkers activate -e bulker/demo           # print exports instead of launching shell")
+  bulkers activate bulker/demo,bulker/pi        # multiple crates
+  bulkers activate demo                          # uses default namespace
+  bulkers activate -s bulker/demo                # strict: only crate commands in PATH
+  bulkers activate --echo bulker/demo            # print exports instead of launching shell
+
+CRATE FORMAT:
+  namespace/crate:tag    Full path (e.g., databio/pepatac:1.0.13)
+  crate                  Uses default namespace \"bulker\", tag \"default\"
+  crate1,crate2          Multiple crates")
         .arg(
             Arg::new("crate_registry_paths")
                 .required(true)
-                .help("Crate to activate, e.g. bulker/demo or namespace/crate:tag"),
+                .help("Crate(s) to activate (comma-separated for multiple)"),
         )
         .arg(
             Arg::new("config")
@@ -35,15 +40,13 @@ EXAMPLES:
         )
         .arg(
             Arg::new("echo")
-                .short('e')
                 .long("echo")
                 .action(ArgAction::SetTrue)
                 .help("Echo export commands instead of launching shell"),
         )
         .arg(
-            Arg::new("no-prompt")
-                .short('p')
-                .long("no-prompt")
+            Arg::new("hide-prompt")
+                .long("hide-prompt")
                 .action(ArgAction::SetTrue)
                 .help("Do not modify the shell prompt"),
         )
@@ -58,7 +61,7 @@ pub fn run(matches: &ArgMatches) -> Result<()> {
 
     let echo = matches.get_flag("echo");
     let strict = matches.get_flag("strict");
-    let prompt = !matches.get_flag("no-prompt");
+    let hide_prompt = matches.get_flag("hide-prompt");
 
-    crate::activate::activate(&config, &config_path, &cratelist, echo, strict, prompt)
+    crate::activate::activate(&config, &config_path, &cratelist, echo, strict, !hide_prompt)
 }

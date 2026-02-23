@@ -9,17 +9,22 @@ use crate::manifest::parse_registry_paths;
 use crate::process;
 
 pub fn create_cli() -> Command {
-    Command::new("run")
-        .about("Run a single command in a crate environment without starting a shell")
+    Command::new("exec")
+        .about("Run a command in a crate environment")
         .after_help("\
 EXAMPLES:
-  bulkers run bulker/demo cowsay hello
-  bulkers run databio/pepatac:1.0.13 samtools --version
-  bulkers run -s bulker/demo cowsay hi  # strict: only crate commands in PATH")
+  bulkers exec bulker/demo -- cowsay hello
+  bulkers exec databio/pepatac:1.0.13 -- samtools --version
+  bulkers exec -s bulker/demo -- cowsay hi    # strict: only crate commands in PATH
+
+CRATE FORMAT:
+  namespace/crate:tag    Full path (e.g., databio/pepatac:1.0.13)
+  crate                  Uses default namespace \"bulker\", tag \"default\"
+  crate1,crate2          Multiple crates")
         .arg(
             Arg::new("crate_registry_paths")
                 .required(true)
-                .help("Crate to use, e.g. bulker/demo or namespace/crate:tag"),
+                .help("Crate(s) to use (comma-separated for multiple)"),
         )
         .arg(
             Arg::new("cmd")
