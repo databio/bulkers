@@ -1,0 +1,15 @@
+bulker:
+  volumes: ['$HOME']
+  envvars: ['DISPLAY']
+  host_network: false
+  system_volumes: false
+  registry_url: http://hub.bulker.io/
+  shell_path: ${SHELL}
+  shell_rc: $HOME/.bashrc
+  rcfile: start.sh
+  rcfile_strict: start_strict.sh
+  container_engine: docker
+  default_namespace: bulker
+  executable_template: docker_executable.tera
+  shell_template: docker_shell.tera
+  build_template: docker_build.tera

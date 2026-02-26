@@ -54,6 +54,7 @@ bulkers() {
       ;;
   esac
 }
+eval "$(\command bulkers completions bash)"
 # <<< bulkers initialize <<<
 "#;
 
@@ -82,5 +83,6 @@ bulkers() {
       ;;
   esac
 }
+eval "$(\command bulkers completions zsh)"
 # <<< bulkers initialize <<<
 "#;

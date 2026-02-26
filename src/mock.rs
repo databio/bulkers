@@ -1,7 +1,6 @@
-// src/mock.rs
-//
-// Core mock mode logic: render mock executables and recording shims for CI testing
-// without requiring Docker or any container runtime.
+//! Mock mode for CI testing without Docker. `mock record` creates shims that
+//! capture real container outputs as JSON; `mock run` replays them via Python
+//! scripts that return the recorded output. No container runtime needed.
 
 use anyhow::{Context, Result};
 use std::os::unix::fs::PermissionsExt;

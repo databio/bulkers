@@ -121,3 +121,84 @@ bulkers exec -s bulker/demo -- cowsay hi
 ```
 
 `bulkers exec` is a binary command that works everywhere — CI pipelines, cron jobs, subprocess calls, AI agent tool use. No shell function or `eval` required.
+
+## macOS notes
+
+On Linux, bulkers adds `--network=host` and mounts system volumes (`/etc/passwd`, etc.)
+by default. On macOS these are skipped, since Docker Desktop runs containers in a VM
+where host networking and system volume mounts don't work as expected.
+
+These defaults are set in `bulker_config.yaml` via `host_network` and `system_volumes`
+keys. You can override them:
+
+    bulkers config set host_network=true    # force host networking
+    bulkers config set system_volumes=true  # force system volume mounts
+
+For services that need port access on macOS, use explicit port mappings in dockerargs:
+
+    commands:
+    - command: postgres
+      docker_image: postgres:latest
+      dockerargs: "-p 5432:5432"
+
+On Linux, this isn't needed — containers can bind ports directly via host networking.
+
+## Debugging
+
+Print the docker command that bulkers generates without running it:
+
+    bulkers exec -p local/bedbase-test -- postgres
+    bulkers exec --print-command local/bedbase-test -- postgres
+
+Output goes to stdout, so it can be piped or saved:
+
+    bulkers exec -p local/bedbase-test -- postgres | pbcopy
+
+When using an activated environment, set the env var directly:
+
+    BULKER_PRINT_COMMAND=1 samtools view input.bam
+
+## Interactive container shells
+
+Every command shimlink has a corresponding `_command` variant (prefixed with underscore)
+that drops you into an interactive bash shell inside the container:
+
+    bulkers activate local/bedbase-test
+    _postgres    # opens bash inside the postgres container
+
+This is useful for debugging — you can inspect the container filesystem, check installed
+packages, or run the command manually with different arguments.
+
+These `_command` shimlinks are created automatically for every command in the manifest.
+They're available whenever a crate is activated.
+
+## Running services
+
+Bulkers is designed for CLI-style commands (run, get output, exit). For long-running
+services like databases, run in a separate terminal:
+
+    bulkers exec local/bedbase-test -- postgres
+
+Or detach with the existing docker args escape hatch:
+
+    BULKER_EXTRA_DOCKER_ARGS="-d --name my-postgres" bulkers exec local/bedbase-test -- postgres
+
+Then manage with docker directly:
+
+    docker logs my-postgres
+    docker stop my-postgres
+
+For multi-service setups (app + database + cache), use docker compose instead — it
+handles networking, health checks, and dependency ordering that bulkers intentionally
+does not.
+
+### Persistent data
+
+`--rm` is always set, so container data is ephemeral by default. For data that
+should survive restarts, add a named volume in dockerargs:
+
+    commands:
+    - command: postgres
+      docker_image: postgres:16
+      no_user: true
+      dockerargs: "-v pgdata:/var/lib/postgresql/data -p 5432:5432 -e POSTGRES_PASSWORD=dev"

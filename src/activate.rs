@@ -1,3 +1,7 @@
+//! Crate activation: resolve a registry path to cached manifests, create an
+//! ephemeral shimlink directory in /tmp, and exec a subshell with the shimlink
+//! dir prepended to PATH. Auto-fetches manifests from the registry if not cached.
+
 use anyhow::{Result, bail};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};

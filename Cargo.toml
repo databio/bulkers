@@ -5,9 +5,12 @@ edition = "2024"
 license = "MIT"
 description = "Multi-container environment manager"
 repository = "https://github.com/databio/bulkers"
+keywords = ["containers", "docker", "apptainer", "environment", "devtools"]
+categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
+clap_complete = "4"
 serde = { version = "1", features = ["derive"] }
 serde_yaml = "0.9"
 tera = "1"

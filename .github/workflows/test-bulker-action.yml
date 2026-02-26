@@ -1,0 +1,18 @@
+name: Test Bulker Action
+on: workflow_dispatch
+jobs:
+  test-registry-crate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: databio/bulker-action@dev
+        with:
+          crate: bulker/demo
+          command: cowsay "bulker works"
+
+  test-pipeline-tools:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: databio/bulker-action@dev
+        with:
+          crate: databio/pepatac:1.0.14
+          command: samtools --version

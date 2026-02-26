@@ -1,11 +1,15 @@
+//! Tera template rendering for container commands (docker/apptainer).
+//! Three template types: executable (shimlink invocations), shell (interactive
+//! `_command` variants), and build (`crate install --build` image pulls).
+//! Template selection is based on `config.bulker.container_engine`, not the
+//! legacy template name fields in config (which exist for serialization but are not read).
+
 use anyhow::{Context, Result};
 use std::path::Path;
 use tera::Tera;
 
 use crate::config::BulkerConfig;
 use crate::manifest::PackageCommand;
-
-// Embedded templates (compiled into the binary)
 pub const DOCKER_EXE_TEMPLATE: &str = include_str!("../templates/docker_executable.tera");
 pub const DOCKER_SHELL_TEMPLATE: &str = include_str!("../templates/docker_shell.tera");
 pub const DOCKER_BUILD_TEMPLATE: &str = include_str!("../templates/docker_build.tera");
@@ -17,7 +21,11 @@ pub const BASH_RC: &str = include_str!("../templates/start.sh");
 pub const BASH_RC_STRICT: &str = include_str!("../templates/start_strict.sh");
 pub const ZSH_RC: &str = include_str!("../templates/zsh_start/.zshrc");
 pub const ZSH_RC_STRICT: &str = include_str!("../templates/zsh_start_strict/.zshrc");
-pub const DEFAULT_CONFIG: &str = include_str!("../templates/bulker_config.yaml");
+#[cfg(target_os = "macos")]
+pub const DEFAULT_CONFIG: &str = include_str!("../templates/bulker_config_macos.yaml");
+
+#[cfg(not(target_os = "macos"))]
+pub const DEFAULT_CONFIG: &str = include_str!("../templates/bulker_config_linux.yaml");
 
 /// Write all embedded templates to a directory on disk (for rcfile references).
 pub fn write_templates_to_dir(dir: &Path) -> Result<()> {

@@ -318,3 +318,76 @@ fn test_config_get_set() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("container_engine"), "config show missing content: {}", stdout);
 }
+
+#[test]
+fn test_config_add_remove() {
+    let tmp = TempDir::new().unwrap();
+    let config_path = init_config(&tmp);
+
+    // Add an envvar
+    let output = bulkers_cmd(tmp.path())
+        .args(["config", "add", "-c", config_path.to_str().unwrap(), "envvars", "MY_CUSTOM_VAR"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Added 'MY_CUSTOM_VAR' to envvars"), "unexpected output: {}", stdout);
+
+    // Verify it's there
+    let output = bulkers_cmd(tmp.path())
+        .args(["config", "get", "-c", config_path.to_str().unwrap(), "envvars"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("MY_CUSTOM_VAR"), "added var not in envvars: {}", stdout);
+
+    // Add duplicate should skip
+    let output = bulkers_cmd(tmp.path())
+        .args(["config", "add", "-c", config_path.to_str().unwrap(), "envvars", "MY_CUSTOM_VAR"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("already in envvars"), "duplicate add should report already exists: {}", stdout);
+
+    // Remove it
+    let output = bulkers_cmd(tmp.path())
+        .args(["config", "remove", "-c", config_path.to_str().unwrap(), "envvars", "MY_CUSTOM_VAR"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Removed 'MY_CUSTOM_VAR' from envvars"), "unexpected output: {}", stdout);
+
+    // Verify it's gone
+    let output = bulkers_cmd(tmp.path())
+        .args(["config", "get", "-c", config_path.to_str().unwrap(), "envvars"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!stdout.contains("MY_CUSTOM_VAR"), "removed var still in envvars: {}", stdout);
+
+    // Remove non-existent should not error
+    let output = bulkers_cmd(tmp.path())
+        .args(["config", "remove", "-c", config_path.to_str().unwrap(), "envvars", "NONEXISTENT_VAR"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("not found in envvars"), "missing var should report not found: {}", stdout);
+}
+
+#[test]
+fn test_config_add_rejects_scalar_key() {
+    let tmp = TempDir::new().unwrap();
+    let config_path = init_config(&tmp);
+
+    // Trying to add to a scalar key should fail
+    let output = bulkers_cmd(tmp.path())
+        .args(["config", "add", "-c", config_path.to_str().unwrap(), "container_engine", "podman"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "add to scalar key should fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("not a list field"), "should mention not a list field: {}", stderr);
+}

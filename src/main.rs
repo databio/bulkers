@@ -21,7 +21,7 @@ pub mod consts {
     pub const BIN_NAME: &str = "bulkers";
 }
 
-fn build_parser() -> Command {
+pub fn build_parser() -> Command {
     Command::new(consts::BIN_NAME)
         .bin_name(consts::BIN_NAME)
         .version(consts::VERSION)
@@ -42,6 +42,7 @@ fn build_parser() -> Command {
         .subcommand(commands::config_cmd::create_cli())
         .subcommand(commands::init_shell::create_cli())
         .subcommand(commands::mock_cmd::create_cli())
+        .subcommand(commands::completions::create_cli())
 }
 
 fn main() -> Result<()> {
@@ -73,6 +74,7 @@ fn main() -> Result<()> {
         Some(("config", sub_m)) => commands::config_cmd::dispatch(sub_m),
         Some(("init-shell", sub_m)) => commands::init_shell::run(sub_m),
         Some(("mock", sub_m)) => commands::mock_cmd::dispatch(sub_m),
+        Some(("completions", sub_m)) => commands::completions::run(sub_m),
         _ => unreachable!("subcommand required"),
     }
 }

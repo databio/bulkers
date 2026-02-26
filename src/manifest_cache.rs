@@ -1,8 +1,6 @@
-// src/manifest_cache.rs
-//
-// Standalone manifest cache module. Stores and retrieves crate manifests
-// in a filesystem-based cache at ~/.config/bulker/manifests/<ns>/<name>/<tag>/manifest.yaml.
-// Decoupled from the config `crates` map.
+//! Standalone manifest cache. Stores and retrieves crate manifests in a
+//! filesystem-based cache at ~/.config/bulker/manifests/<ns>/<name>/<tag>/manifest.yaml.
+//! Decoupled from the config `crates` map — activate auto-fetches on demand.
 
 use anyhow::{Context, Result};
 use std::path::PathBuf;
@@ -232,6 +230,7 @@ mod tests {
                     envvars: vec![],
                     no_user: false,
                     no_network: false,
+                    no_default_volumes: false,
                     workdir: None,
                 }],
                 host_commands: vec!["ls".to_string()],

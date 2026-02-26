@@ -21,15 +21,19 @@ pub struct BulkerSettings {
     pub shell_path: String,
     #[serde(default = "default_shell_rc")]
     pub shell_rc: String,
-    pub executable_template: String,
-    pub shell_template: String,
-    pub build_template: String,
+    pub executable_template: String, // Legacy: not read at runtime. See templates.rs.
+    pub shell_template: String,      // Legacy: not read at runtime. See templates.rs.
+    pub build_template: String,      // Legacy: not read at runtime. See templates.rs.
     pub rcfile: String,
     pub rcfile_strict: String,
     #[serde(default = "default_volumes")]
     pub volumes: Vec<String>,
     #[serde(default = "default_envvars")]
     pub envvars: Vec<String>,
+    #[serde(default = "default_host_network")]
+    pub host_network: bool,
+    #[serde(default = "default_system_volumes")]
+    pub system_volumes: bool,
     #[serde(default)]
     pub tool_args: Option<serde_yaml::Value>,
     #[serde(default)]
@@ -44,6 +48,14 @@ fn default_registry_url() -> String {
 
 fn default_shell_rc() -> String {
     "$HOME/.bashrc".to_string()
+}
+
+fn default_host_network() -> bool {
+    !cfg!(target_os = "macos") // true on Linux, false on macOS
+}
+
+fn default_system_volumes() -> bool {
+    !cfg!(target_os = "macos") // true on Linux, false on macOS
 }
 
 fn default_volumes() -> Vec<String> {
@@ -205,6 +217,23 @@ pub fn mkabs(path: &str, rel_dir: Option<&Path>) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_default_host_network() {
+        // On Linux (our CI), should be true
+        #[cfg(not(target_os = "macos"))]
+        assert!(default_host_network());
+        #[cfg(target_os = "macos")]
+        assert!(!default_host_network());
+    }
+
+    #[test]
+    fn test_default_system_volumes() {
+        #[cfg(not(target_os = "macos"))]
+        assert!(default_system_volumes());
+        #[cfg(target_os = "macos")]
+        assert!(!default_system_volumes());
+    }
 
     #[test]
     fn test_expand_path_home() {

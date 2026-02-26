@@ -1,6 +1,8 @@
 bulker:
   volumes: ['$HOME']
   envvars: ['DISPLAY']
+  host_network: true
+  system_volumes: true
   registry_url: http://hub.bulker.io/
   shell_path: ${SHELL}
   shell_rc: $HOME/.bashrc

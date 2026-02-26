@@ -1,9 +1,7 @@
-// src/shimlink.rs
-//
-// Busybox-pattern executable dispatch. When bulkers is invoked via a symlink
-// (e.g., as "samtools"), argv[0] tells us which command to run. We look up the
-// command in the crate manifest, build the docker/apptainer command dynamically,
-// and exec it. No generated shell scripts needed.
+//! Busybox-pattern executable dispatch. When bulkers is invoked via a symlink
+//! (e.g., as "samtools"), argv[0] tells us which command to run. We look up the
+//! command in the crate manifest, build the docker/apptainer command dynamically,
+//! and exec it. No generated shell scripts needed.
 
 use anyhow::{Context, Result, bail};
 use std::os::unix::process::CommandExt;
@@ -69,7 +67,11 @@ pub fn shimlink_exec(command_name: &str, args: &[String]) -> Result<()> {
     let (resolved_args, auto_mount_dirs) = resolve_arg_paths(args);
 
     // 5. Merge volumes: config + command + auto-mount
-    let mut volumes = config.bulker.volumes.clone();
+    let mut volumes = if pkg.no_default_volumes {
+        Vec::new()
+    } else {
+        config.bulker.volumes.clone()
+    };
     for v in &pkg.volumes {
         if !volumes.contains(v) {
             volumes.push(v.clone());
@@ -155,6 +157,12 @@ pub fn shimlink_exec(command_name: &str, args: &[String]) -> Result<()> {
         bail!("Failed to build container command");
     }
 
+    // Print command instead of executing if BULKER_PRINT_COMMAND is set
+    if std::env::var("BULKER_PRINT_COMMAND").is_ok() {
+        println!("{}", cmd_vec.join(" "));
+        return Ok(());
+    }
+
     log::debug!("Shimlink exec: {:?}", cmd_vec);
 
     // Set up signal forwarding
@@ -186,7 +194,7 @@ pub fn shimlink_exec(command_name: &str, args: &[String]) -> Result<()> {
 
 /// Build a docker run command from resolved command config.
 pub fn build_docker_command(
-    _config: &BulkerConfig,
+    config: &BulkerConfig,
     pkg: &PackageCommand,
     volumes: &[String],
     envvars: &[String],
@@ -215,8 +223,8 @@ pub fn build_docker_command(
         cmd.push(format!("--user={}:{}", uid, gid));
     }
 
-    // Network (unless no_network)
-    if !pkg.no_network {
+    // Network (unless no_network or config disables host networking)
+    if !pkg.no_network && config.bulker.host_network {
         cmd.push("--network=host".to_string());
     }
 
@@ -233,8 +241,8 @@ pub fn build_docker_command(
         cmd.push(format!("{}:{}", expanded, expanded));
     }
 
-    // System volumes for user mapping
-    if !pkg.no_user {
+    // System volumes for user mapping (skipped on macOS via config)
+    if !pkg.no_user && config.bulker.system_volumes {
         for sys_vol in &[
             "/etc/group:/etc/group:ro",
             "/etc/passwd:/etc/passwd:ro",
@@ -674,6 +682,7 @@ mod tests {
             envvars: vec![],
             no_user: false,
             no_network: false,
+            no_default_volumes: false,
             workdir: None,
         };
         let volumes = vec!["/home/user".to_string()];
@@ -714,6 +723,7 @@ mod tests {
             envvars: vec![],
             no_user: false,
             no_network: false,
+            no_default_volumes: false,
             workdir: None,
         };
         let cmd = build_docker_command(&config, &pkg, &[], &[], "", &[], true);
@@ -736,12 +746,60 @@ mod tests {
             envvars: vec![],
             no_user: true,
             no_network: false,
+            no_default_volumes: false,
             workdir: None,
         };
         let cmd = build_docker_command(&config, &pkg, &[], &[], "", &[], false);
         // Should NOT contain --user= or system volumes
         let cmd_str = cmd.join(" ");
         assert!(!cmd_str.contains("--user="));
+        assert!(!cmd_str.contains("/etc/passwd"));
+    }
+
+    #[test]
+    fn test_build_docker_command_host_network_disabled() {
+        let mut config = make_test_config();
+        config.bulker.host_network = false;
+        let pkg = PackageCommand {
+            command: "tool".to_string(),
+            docker_image: "myimage:latest".to_string(),
+            docker_command: None,
+            docker_args: None,
+            dockerargs: None,
+            apptainer_args: None,
+            apptainer_command: None,
+            volumes: vec![],
+            envvars: vec![],
+            no_user: false,
+            no_network: false,
+            no_default_volumes: false,
+            workdir: None,
+        };
+        let cmd = build_docker_command(&config, &pkg, &[], &[], "", &[], false);
+        assert!(!cmd.contains(&"--network=host".to_string()));
+    }
+
+    #[test]
+    fn test_build_docker_command_system_volumes_disabled() {
+        let mut config = make_test_config();
+        config.bulker.system_volumes = false;
+        let pkg = PackageCommand {
+            command: "tool".to_string(),
+            docker_image: "myimage:latest".to_string(),
+            docker_command: None,
+            docker_args: None,
+            dockerargs: None,
+            apptainer_args: None,
+            apptainer_command: None,
+            volumes: vec![],
+            envvars: vec![],
+            no_user: false,
+            no_network: false,
+            no_default_volumes: false,
+            workdir: None,
+        };
+        let cmd = build_docker_command(&config, &pkg, &[], &[], "", &[], false);
+        let cmd_str = cmd.join(" ");
         assert!(!cmd_str.contains("/etc/passwd"));
     }
 
@@ -760,6 +818,7 @@ mod tests {
             envvars: vec![],
             no_user: false,
             no_network: true,
+            no_default_volumes: false,
             workdir: None,
         };
         let cmd = build_docker_command(&config, &pkg, &[], &[], "", &[], false);
@@ -781,6 +840,7 @@ mod tests {
             envvars: vec![],
             no_user: false,
             no_network: false,
+            no_default_volumes: false,
             workdir: None,
         };
         let cmd = build_docker_command(&config, &pkg, &[], &[], "", &["--version".to_string()], false);
@@ -804,6 +864,7 @@ mod tests {
             envvars: vec![],
             no_user: false,
             no_network: false,
+            no_default_volumes: false,
             workdir: None,
         };
 
@@ -835,6 +896,7 @@ mod tests {
                         envvars: vec![],
                         no_user: false,
                         no_network: false,
+                        no_default_volumes: false,
                         workdir: None,
                     },
                     PackageCommand {
@@ -849,6 +911,7 @@ mod tests {
                         envvars: vec![],
                         no_user: false,
                         no_network: false,
+                        no_default_volumes: false,
                         workdir: None,
                     },
                 ],
@@ -874,6 +937,59 @@ mod tests {
         assert!(shimdir.join("_bcftools").is_symlink());
     }
 
+    #[test]
+    fn test_no_default_volumes_skips_config_volumes() {
+        let config = make_test_config();
+        // config has volumes: ["$HOME"]
+        let pkg_with_flag = PackageCommand {
+            command: "postgres".to_string(),
+            docker_image: "postgres:16".to_string(),
+            docker_command: None,
+            docker_args: None,
+            dockerargs: None,
+            apptainer_args: None,
+            apptainer_command: None,
+            volumes: vec!["/data".to_string()],
+            envvars: vec![],
+            no_user: true,
+            no_network: false,
+            no_default_volumes: true,
+            workdir: None,
+        };
+
+        // Simulate the volume merge logic from shimlink_exec
+        let volumes_with_flag = if pkg_with_flag.no_default_volumes {
+            Vec::new()
+        } else {
+            config.bulker.volumes.clone()
+        };
+        // no_default_volumes=true -> starts empty, only per-command volumes added
+        assert!(volumes_with_flag.is_empty());
+
+        let pkg_without_flag = PackageCommand {
+            command: "postgres".to_string(),
+            docker_image: "postgres:16".to_string(),
+            docker_command: None,
+            docker_args: None,
+            dockerargs: None,
+            apptainer_args: None,
+            apptainer_command: None,
+            volumes: vec!["/data".to_string()],
+            envvars: vec![],
+            no_user: true,
+            no_network: false,
+            no_default_volumes: false,
+            workdir: None,
+        };
+        let volumes_without_flag = if pkg_without_flag.no_default_volumes {
+            Vec::new()
+        } else {
+            config.bulker.volumes.clone()
+        };
+        // no_default_volumes=false -> starts with config volumes
+        assert_eq!(volumes_without_flag, vec!["$HOME".to_string()]);
+    }
+
     /// Helper to build a minimal BulkerConfig for tests.
     fn make_test_config() -> BulkerConfig {
         BulkerConfig {
@@ -890,6 +1006,8 @@ mod tests {
                 rcfile_strict: "start_strict.sh".to_string(),
                 volumes: vec!["$HOME".to_string()],
                 envvars: vec!["DISPLAY".to_string()],
+                host_network: true,
+                system_volumes: true,
                 tool_args: None,
                 shell_prompt: None,
                 apptainer_image_folder: None,

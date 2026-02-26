@@ -46,6 +46,13 @@ CRATE FORMAT:
                 .action(ArgAction::SetTrue)
                 .help("Strict mode: only crate commands available in PATH"),
         )
+        .arg(
+            Arg::new("print_command")
+                .short('p')
+                .long("print-command")
+                .action(ArgAction::SetTrue)
+                .help("Print the generated docker/apptainer command instead of running it"),
+        )
 }
 
 pub fn run(matches: &ArgMatches) -> Result<()> {
@@ -57,6 +64,11 @@ pub fn run(matches: &ArgMatches) -> Result<()> {
     let strict = matches.get_flag("strict");
 
     let cmd_args: Vec<&String> = matches.get_many::<String>("cmd").unwrap().collect();
+
+    if matches.get_flag("print_command") {
+        // SAFETY: called before any threads are spawned
+        unsafe { std::env::set_var("BULKER_PRINT_COMMAND", "1"); }
+    }
 
     let newpath = get_new_path(&config, &cratelist, strict, false)?;
 

@@ -1,4 +1,5 @@
 pub mod activate;
+pub mod completions;
 pub mod config_cmd;
 pub mod crate_cmd;
 pub mod exec;

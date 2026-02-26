@@ -74,6 +74,8 @@ pub struct PackageCommand {
     #[serde(default)]
     pub no_network: bool,
     #[serde(default)]
+    pub no_default_volumes: bool,
+    #[serde(default)]
     pub workdir: Option<String>,
 }
 
@@ -309,6 +311,8 @@ mod tests {
                 rcfile_strict: "start_strict.sh".to_string(),
                 volumes: vec!["$HOME".to_string()],
                 envvars: vec!["DISPLAY".to_string()],
+                host_network: true,
+                system_volumes: true,
                 tool_args: None,
                 shell_prompt: None,
                 apptainer_image_folder: None,
