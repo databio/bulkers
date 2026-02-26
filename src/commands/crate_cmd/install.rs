@@ -33,6 +33,18 @@ CRATEFILE FORMAT:
                 .action(ArgAction::SetTrue)
                 .help("Build/pull container images"),
         )
+        .arg(
+            Arg::new("name")
+                .short('n')
+                .long("name")
+                .help("Override crate identity (e.g., bulker/biobase or bulker/biobase:0.1.0)"),
+        )
+        .arg(
+            Arg::new("no-overwrite")
+                .long("no-overwrite")
+                .action(ArgAction::SetTrue)
+                .help("Don't overwrite locally modified cached manifests"),
+        )
 }
 
 pub fn run(matches: &ArgMatches) -> Result<()> {
@@ -40,10 +52,12 @@ pub fn run(matches: &ArgMatches) -> Result<()> {
 
     let cratefile = matches.get_one::<String>("cratefile").unwrap();
     let build = matches.get_flag("build");
+    let name_override = matches.get_one::<String>("name").map(|s| s.as_str());
+    let no_overwrite = matches.get_flag("no-overwrite");
 
     if is_local_path(cratefile) {
         // Local manifest file
-        let (cv, manifest) = load_local_manifest(cratefile)?;
+        let (cv, manifest) = load_local_manifest(cratefile, name_override, &config.bulker.default_namespace)?;
         manifest_cache::save_to_cache(&cv, &manifest)?;
         if build {
             manifest_cache::pull_images(&config, &manifest)?;
@@ -55,7 +69,7 @@ pub fn run(matches: &ArgMatches) -> Result<()> {
         let cratelist = parse_registry_paths(cratefile, &config.bulker.default_namespace)?;
         for cv in &cratelist {
             let mut visited = std::collections::HashSet::new();
-            manifest_cache::ensure_cached_with_imports(&config, cv, true, &mut visited, 0)?;  // always fetch fresh on explicit install
+            manifest_cache::ensure_cached_with_imports(&config, cv, true, no_overwrite, &mut visited, 0)?;  // always fetch fresh on explicit install
             if build {
                 let manifest = manifest_cache::load_cached(cv)?.unwrap();
                 manifest_cache::pull_images(&config, &manifest)?;

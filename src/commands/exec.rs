@@ -3,7 +3,7 @@ use clap::{Arg, ArgAction, ArgMatches, Command};
 
 use crate::activate::get_new_path;
 use crate::config::load_config;
-use crate::manifest::parse_registry_paths;
+use crate::manifest::{is_local_path, load_local_manifest, parse_registry_paths};
 use crate::process;
 
 pub fn create_cli() -> Command {
@@ -45,11 +45,23 @@ CRATE FORMAT:
                 .help("Strict mode: only crate commands available in PATH"),
         )
         .arg(
+            Arg::new("strict_env")
+                .long("strict-env")
+                .action(ArgAction::SetTrue)
+                .help("Clean container environment: only pass envvars allowlist (config + manifest)"),
+        )
+        .arg(
             Arg::new("print_command")
                 .short('p')
                 .long("print-command")
                 .action(ArgAction::SetTrue)
                 .help("Print the generated docker/apptainer command instead of running it"),
+        )
+        .arg(
+            Arg::new("name")
+                .short('n')
+                .long("name")
+                .help("Override crate identity for local manifests (e.g., bulker/biobase:0.1.0)"),
         )
 }
 
@@ -57,8 +69,16 @@ pub fn run(matches: &ArgMatches) -> Result<()> {
     let (config, config_path) = load_config(matches.get_one::<String>("config").map(|s| s.as_str()))?;
 
     let registry_paths = matches.get_one::<String>("crate_registry_paths").unwrap();
-    let cratelist = parse_registry_paths(registry_paths, &config.bulker.default_namespace)?;
+    let name_override = matches.get_one::<String>("name").map(|s| s.as_str());
     let strict = matches.get_flag("strict");
+
+    let cratelist = if is_local_path(registry_paths) {
+        let (cv, manifest) = load_local_manifest(registry_paths, name_override, &config.bulker.default_namespace)?;
+        crate::manifest_cache::save_to_cache(&cv, &manifest)?;
+        vec![cv]
+    } else {
+        parse_registry_paths(registry_paths, &config.bulker.default_namespace)?
+    };
 
     let cmd_args: Vec<&String> = matches.get_many::<String>("cmd").unwrap().collect();
 
@@ -83,11 +103,17 @@ pub fn run(matches: &ArgMatches) -> Result<()> {
         Some(p) => format!("export BULKERCFG=\"{}\"; ", p.display()),
         None => String::new(),
     };
+    let strict_env_export = if matches.get_flag("strict_env") {
+        "export BULKER_STRICT_ENV=1; "
+    } else {
+        ""
+    };
     let merged_command = format!(
-        "export PATH=\"{}\"; export BULKERCRATE=\"{}\"; {}{}",
+        "export PATH=\"{}\"; export BULKERCRATE=\"{}\"; {}{}{}",
         result.path,
         crate_id,
         bulkercfg_export,
+        strict_env_export,
         quoted_args.join(" ")
     );
 

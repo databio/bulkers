@@ -128,7 +128,7 @@ fn test_crate_list() {
         .unwrap();
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("test_manifest") || stdout.contains("local/test_manifest"),
+    assert!(stdout.contains("test-crate") || stdout.contains("bulker/test-crate"),
         "list output missing crate: {}", stdout);
 }
 
@@ -138,9 +138,9 @@ fn test_crate_inspect() {
     let config_path = init_config(&tmp);
     install_test_crate(&tmp, &config_path);
 
-    // Inspect the cached crate (local/test_manifest:default)
+    // Inspect the cached crate (bulker/test-crate:1.0.0)
     let output = bulker_cmd(tmp.path())
-        .args(["crate", "inspect", "-c", config_path.to_str().unwrap(), "local/test_manifest:default"])
+        .args(["crate", "inspect", "-c", config_path.to_str().unwrap(), "bulker/test-crate:1.0.0"])
         .output()
         .unwrap();
 
@@ -163,7 +163,7 @@ fn test_activate_echo_mode() {
             "activate",
             "-c", config_path.to_str().unwrap(),
             "--echo",
-            "local/test_manifest:default",
+            "bulker/test-crate:1.0.0",
         ])
         .output()
         .unwrap();
@@ -213,15 +213,13 @@ fn test_activate_force() {
             "-c", config_path.to_str().unwrap(),
             "--echo",
             "--force",
-            "local/test_manifest:default",
+            "bulker/test-crate:1.0.0",
         ])
         .output()
         .unwrap();
 
-    // --force for a "local/" namespace crate will try to re-fetch from registry.
-    // Since "local/test_manifest" isn't on the registry, this will fail.
-    // That's the expected behavior: --force is for registry crates.
-    // We just check the flag is recognized (not an unrecognized flag error).
+    // --force will try to re-fetch from registry. The test-crate manifest likely
+    // doesn't exist on the real registry, but we just check the flag is recognized.
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!stderr.contains("unrecognized"), "activate --force should be a recognized flag");
 }
@@ -234,7 +232,7 @@ fn test_crate_clean_specific() {
 
     // Clean the specific crate
     let output = bulker_cmd(tmp.path())
-        .args(["crate", "clean", "-c", config_path.to_str().unwrap(), "local/test_manifest:default"])
+        .args(["crate", "clean", "-c", config_path.to_str().unwrap(), "bulker/test-crate:1.0.0"])
         .output()
         .unwrap();
 
@@ -248,7 +246,7 @@ fn test_crate_clean_specific() {
         .output()
         .unwrap();
     let list_stdout = String::from_utf8_lossy(&list_output.stdout);
-    assert!(list_stdout.contains("No cached crates") || !list_stdout.contains("test_manifest"),
+    assert!(list_stdout.contains("No cached crates") || !list_stdout.contains("test-crate"),
         "crate still listed after clean: {}", list_stdout);
 }
 
@@ -418,7 +416,7 @@ fn test_activate_strict_echo_no_host_path() {
             "-c", config_path.to_str().unwrap(),
             "--echo",
             "--strict",
-            "local/test_manifest:default",
+            "bulker/test-crate:1.0.0",
         ])
         .output()
         .unwrap();

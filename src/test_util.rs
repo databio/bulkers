@@ -32,6 +32,22 @@ impl EnvGuard {
             _lock: lock,
         }
     }
+
+    /// Save the current value of `key`, remove it from the environment, and hold
+    /// a global lock until this guard is dropped. Restores the original value on drop.
+    pub fn remove(key: &str) -> Self {
+        let lock = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let original = std::env::var(key).ok();
+        // SAFETY: We hold ENV_MUTEX so no other EnvGuard-using test is running.
+        unsafe {
+            std::env::remove_var(key);
+        }
+        EnvGuard {
+            key: key.to_string(),
+            original,
+            _lock: lock,
+        }
+    }
 }
 
 impl Drop for EnvGuard {

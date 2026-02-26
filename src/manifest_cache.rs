@@ -103,8 +103,9 @@ pub fn save_to_cache(cv: &CrateVars, manifest: &Manifest) -> Result<()> {
 }
 
 /// Ensure a manifest is cached. Fetches from registry if not present.
-/// If `force` is true, always re-fetch.
-pub fn ensure_cached(config: &BulkerConfig, cv: &CrateVars, force: bool) -> Result<Manifest> {
+/// If `force` is true, always re-fetch. If `no_overwrite` is true,
+/// skip overwriting when the cached version differs (warns instead).
+pub fn ensure_cached(config: &BulkerConfig, cv: &CrateVars, force: bool, no_overwrite: bool) -> Result<Manifest> {
     if !force {
         if let Some(manifest) = load_cached(cv)? {
             return Ok(manifest);
@@ -112,6 +113,29 @@ pub fn ensure_cached(config: &BulkerConfig, cv: &CrateVars, force: bool) -> Resu
     }
     log::info!("Fetching manifest: {}", cv.display_name());
     let (manifest, _) = load_remote_manifest(config, &cv.display_name(), None)?;
+
+    // Check if we're about to overwrite a different cached version
+    if force {
+        if let Some(ref existing) = load_cached(cv)? {
+            let old = crate::digest::crate_manifest_digest(existing).digest;
+            let new = crate::digest::crate_manifest_digest(&manifest).digest;
+            if old != new {
+                if no_overwrite {
+                    log::warn!(
+                        "Keeping local '{}' (digest {}…), registry has {}…",
+                        cv.display_name(), &old[..8], &new[..8]
+                    );
+                    return Ok(existing.clone());
+                } else {
+                    log::warn!(
+                        "Overwriting local '{}' (digest {}… → {}…)",
+                        cv.display_name(), &old[..8], &new[..8]
+                    );
+                }
+            }
+        }
+    }
+
     save_to_cache(cv, &manifest)?;
     Ok(manifest)
 }
@@ -123,13 +147,14 @@ pub fn ensure_cached_with_imports(
     config: &BulkerConfig,
     cv: &CrateVars,
     force: bool,
+    no_overwrite: bool,
     visited: &mut HashSet<String>,
     depth: usize,
 ) -> Result<Manifest> {
     let key = cv.display_name();
     if visited.contains(&key) {
         log::debug!("Skipping already-visited import: {}", key);
-        return ensure_cached(config, cv, force);
+        return ensure_cached(config, cv, force, no_overwrite);
     }
     if depth >= MAX_IMPORT_DEPTH {
         anyhow::bail!(
@@ -140,10 +165,10 @@ pub fn ensure_cached_with_imports(
     }
     visited.insert(key);
 
-    let manifest = ensure_cached(config, cv, force)?;
+    let manifest = ensure_cached(config, cv, force, no_overwrite)?;
     for import_path in &manifest.manifest.imports {
         let import_cv = parse_registry_path(import_path, &config.bulker.default_namespace)?;
-        ensure_cached_with_imports(config, &import_cv, force, visited, depth + 1)?;
+        ensure_cached_with_imports(config, &import_cv, force, no_overwrite, visited, depth + 1)?;
     }
     Ok(manifest)
 }
@@ -365,7 +390,7 @@ mod tests {
         // This should NOT stack overflow. It should complete successfully
         // (cycle broken by visited set).
         let mut visited = std::collections::HashSet::new();
-        let result = ensure_cached_with_imports(&config, &cv_a, false, &mut visited, 0);
+        let result = ensure_cached_with_imports(&config, &cv_a, false, false, &mut visited, 0);
         assert!(result.is_ok(), "Cycle detection failed: {:?}", result.err());
 
 
@@ -404,7 +429,7 @@ mod tests {
         };
 
         let mut visited = std::collections::HashSet::new();
-        let result = ensure_cached_with_imports(&config, &cv_start, false, &mut visited, 0);
+        let result = ensure_cached_with_imports(&config, &cv_start, false, false, &mut visited, 0);
         assert!(result.is_err(), "Should have failed with depth limit error");
         let err_msg = result.unwrap_err().to_string();
         assert!(err_msg.contains("Import depth exceeded"), "Error message should mention depth: {}", err_msg);

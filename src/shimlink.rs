@@ -4,6 +4,7 @@
 //! and exec it. No generated shell scripts needed.
 
 use anyhow::{Context, Result, bail};
+use std::io::IsTerminal;
 use std::path::Path;
 
 use crate::config::{BulkerConfig, expand_path, load_config};
@@ -58,14 +59,21 @@ pub fn shimlink_exec(command_name: &str, args: &[String]) -> Result<()> {
     crate::manifest::merge_lists(&mut volumes, &pkg.volumes);
     crate::manifest::merge_lists(&mut volumes, &auto_mount_dirs);
 
-    // 5. Merge envvars: config + command
-    let mut envvars = config.bulker.envvars.clone();
-    crate::manifest::merge_lists(&mut envvars, &pkg.envvars);
-    // Add BULKER_EXTRA_ENVVARS from environment
-    if let Ok(extra) = std::env::var("BULKER_EXTRA_ENVVARS") {
-        let extras: Vec<String> = extra.split(',').map(|e| e.trim().to_string()).filter(|e| !e.is_empty()).collect();
-        crate::manifest::merge_lists(&mut envvars, &extras);
-    }
+    // 5. Collect envvars based on mode
+    let strict_env = std::env::var("BULKER_STRICT_ENV").is_ok();
+    let envvars = if strict_env {
+        // Strict-env mode: only pass allowlisted vars (config + manifest + extras)
+        let mut vars = config.bulker.envvars.clone();
+        crate::manifest::merge_lists(&mut vars, &pkg.envvars);
+        if let Ok(extra) = std::env::var("BULKER_EXTRA_ENVVARS") {
+            let extras: Vec<String> = extra.split(',').map(|e| e.trim().to_string()).filter(|e| !e.is_empty()).collect();
+            crate::manifest::merge_lists(&mut vars, &extras);
+        }
+        vars
+    } else {
+        // Normal mode: pass all host env vars except Docker-managed ones
+        collect_host_envvars()
+    };
 
     // 6. Merge docker_args from multiple sources
     let tool_extra = config.host_tool_specific_args(&pkg, "docker_args");
@@ -132,15 +140,27 @@ pub fn build_docker_command(
 ) -> Vec<String> {
     let mut cmd = vec![engine_path.to_string(), "run".to_string(), "--rm".to_string(), "--init".to_string()];
 
-    if interactive {
+    // Always keep stdin open (-i) and auto-detect TTY (-t)
+    if stdin_is_tty() {
         cmd.push("-it".to_string());
+    } else {
+        cmd.push("-i".to_string());
     }
 
-    // Docker args
+    // Strip -t/--tty from docker_args — TTY is now auto-detected
     if !docker_args.is_empty() {
-        let expanded_args = expand_path(docker_args);
-        for part in shell_split(&expanded_args) {
-            cmd.push(part);
+        let cleaned_args = strip_tty_flag(docker_args);
+        if cleaned_args != docker_args.trim() {
+            log::warn!(
+                "Ignoring -t/--tty in docker_args for '{}': TTY is now auto-detected by bulker",
+                pkg.command
+            );
+        }
+        if !cleaned_args.is_empty() {
+            let expanded_args = expand_path(&cleaned_args);
+            for part in shell_split(&expanded_args) {
+                cmd.push(part);
+            }
         }
     }
 
@@ -221,7 +241,7 @@ pub fn build_apptainer_command(
     config: &BulkerConfig,
     pkg: &PackageCommand,
     volumes: &[String],
-    _envvars: &[String],
+    envvars: &[String],
     args: &[String],
     interactive: bool,
     engine_path: &str,
@@ -231,7 +251,20 @@ pub fn build_apptainer_command(
         config.bulker.apptainer_image_folder.as_deref(),
     );
 
+    let strict_env = std::env::var("BULKER_STRICT_ENV").is_ok();
+
     let mut cmd = vec![engine_path.to_string(), "exec".to_string()];
+
+    // Strict-env mode: clean environment, then pass allowlisted vars explicitly
+    if strict_env {
+        cmd.push("--cleanenv".to_string());
+        for var in envvars {
+            if let Ok(val) = std::env::var(var) {
+                cmd.push("--env".to_string());
+                cmd.push(format!("{}={}", var, val));
+            }
+        }
+    }
 
     // Apptainer-specific args
     if let Some(ref aa) = pkg.apptainer_args {
@@ -437,6 +470,49 @@ pub fn create_shimlink_dir(manifest: &Manifest, dir: &Path) -> Result<()> {
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
+/// Env vars managed by Docker that should not be passed from the host.
+const DOCKER_MANAGED_VARS: &[&str] = &["PATH", "HOME", "HOSTNAME"];
+
+/// Collect all host environment variable names, excluding Docker-managed vars
+/// and bulker internal vars.
+fn collect_host_envvars() -> Vec<String> {
+    std::env::vars()
+        .map(|(k, _)| k)
+        .filter(|k| !DOCKER_MANAGED_VARS.contains(&k.as_str()))
+        .filter(|k| !k.starts_with("BULKER"))
+        .collect()
+}
+
+/// Check if stdin is connected to a TTY (terminal).
+fn stdin_is_tty() -> bool {
+    std::io::stdin().is_terminal()
+}
+
+/// Strip the `-t` / `--tty` flag from a docker_args string when stdin is not a TTY.
+/// Converts `-it` to `-i`, `-ti` to `-i`, removes standalone `-t` and `--tty`,
+/// and strips `t` from compound short flags like `-dit` → `-di`.
+fn strip_tty_flag(args: &str) -> String {
+    let parts = shell_split(args);
+    let mut result = Vec::new();
+    for part in parts {
+        if part == "-t" || part == "--tty" {
+            continue;
+        }
+        if part.starts_with('-') && !part.starts_with("--") && part.len() > 1 {
+            // Short flag cluster like -it, -ti, -dit
+            let stripped: String = part.chars().filter(|&c| c != 't').collect();
+            if stripped == "-" {
+                // Was just -t, already handled above, but guard against edge case
+                continue;
+            }
+            result.push(stripped);
+        } else {
+            result.push(part);
+        }
+    }
+    result.join(" ")
+}
+
 /// Simple shell-like argument splitting (handles quoted strings).
 fn shell_split(s: &str) -> Vec<String> {
     let mut result = Vec::new();
@@ -581,8 +657,8 @@ mod tests {
         assert_eq!(cmd[1], "run");
         assert_eq!(cmd[2], "--rm");
         assert_eq!(cmd[3], "--init");
-        // Should NOT contain -it for non-interactive
-        assert!(!cmd.contains(&"-it".to_string()));
+        // All commands get -i (or -it if TTY); tests run without TTY so expect -i
+        assert!(cmd.contains(&"-i".to_string()));
         // Should contain the image
         assert!(cmd.contains(&"quay.io/biocontainers/samtools:1.9".to_string()));
         // Should contain the command
@@ -603,8 +679,10 @@ mod tests {
             ..Default::default()
         };
         let cmd = build_docker_command(&config, &pkg, &[], &[], "", &[], true, "docker");
-        assert!(cmd.contains(&"-it".to_string()));
+        // Interactive flag controls bash launch, not -it (TTY is auto-detected)
         assert!(cmd.contains(&"bash".to_string()));
+        // -i is always present (tests run without TTY)
+        assert!(cmd.contains(&"-i".to_string()));
     }
 
     #[test]
@@ -912,6 +990,197 @@ mod tests {
         assert_eq!(pkg2.command, "samtools");
 
         // EnvGuard restores XDG_CONFIG_HOME on drop
+    }
+
+    // ─── strip_tty_flag tests ────────────────────────────────────────────────
+
+    #[test]
+    fn test_build_docker_command_strips_tty_from_docker_args() {
+        let config = BulkerConfig::test_default();
+        let pkg = PackageCommand {
+            command: "R".to_string(),
+            docker_image: "r-base:4.3".to_string(),
+            ..Default::default()
+        };
+        // docker_args has -it; the -t should be stripped (TTY is auto-detected)
+        let cmd = build_docker_command(&config, &pkg, &[], &[], "-it", &[], false, "docker");
+        let cmd_str = cmd.join(" ");
+        // -i from docker_args is kept, but -t is stripped
+        // The auto-detected -i (or -it) is also present at position 4
+        assert!(!cmd_str.contains(" -it "), "docker_args -t should be stripped: {}", cmd_str);
+        // Verify -i from docker_args is present (stripped from -it)
+        let docker_args_idx = cmd.iter().position(|a| a == "--init").unwrap() + 1;
+        // After --init comes the auto-detected -i, then the cleaned docker_args -i
+        assert!(cmd[docker_args_idx..].contains(&"-i".to_string()));
+    }
+
+    #[test]
+    fn test_strip_tty_flag_it() {
+        assert_eq!(strip_tty_flag("-it"), "-i");
+    }
+
+    #[test]
+    fn test_strip_tty_flag_ti() {
+        assert_eq!(strip_tty_flag("-ti"), "-i");
+    }
+
+    #[test]
+    fn test_strip_tty_flag_standalone_t() {
+        assert_eq!(strip_tty_flag("-t"), "");
+    }
+
+    #[test]
+    fn test_strip_tty_flag_long_tty() {
+        assert_eq!(strip_tty_flag("--tty"), "");
+    }
+
+    #[test]
+    fn test_strip_tty_flag_no_tty_present() {
+        assert_eq!(strip_tty_flag("-i --entrypoint jq"), "-i --entrypoint jq");
+    }
+
+    #[test]
+    fn test_strip_tty_flag_mixed_args() {
+        assert_eq!(
+            strip_tty_flag("--gpus all -it --shm-size 8g"),
+            "--gpus all -i --shm-size 8g"
+        );
+    }
+
+    #[test]
+    fn test_strip_tty_flag_port_mapping_unchanged() {
+        assert_eq!(
+            strip_tty_flag("-p 9200:9200 -p 9300:9300"),
+            "-p 9200:9200 -p 9300:9300"
+        );
+    }
+
+    #[test]
+    fn test_strip_tty_flag_compound_dit() {
+        assert_eq!(strip_tty_flag("-dit"), "-di");
+    }
+
+    #[test]
+    fn test_strip_tty_flag_empty() {
+        assert_eq!(strip_tty_flag(""), "");
+    }
+
+    // ─── env var mode tests ───────────────────────────────────────────────
+
+    #[test]
+    fn test_collect_host_envvars_excludes_docker_managed() {
+        let vars = collect_host_envvars();
+        assert!(!vars.contains(&"PATH".to_string()));
+        assert!(!vars.contains(&"HOME".to_string()));
+        assert!(!vars.contains(&"HOSTNAME".to_string()));
+    }
+
+    #[test]
+    fn test_collect_host_envvars_excludes_bulker_vars() {
+        // BULKERCRATE etc. are set in activated environments — should not leak into containers
+        // Use EnvGuard to set a BULKER_ var, then verify it's excluded
+        let _guard = crate::test_util::EnvGuard::set("BULKER_TEST_INTERNAL", "x");
+        let vars = collect_host_envvars();
+        assert!(!vars.contains(&"BULKER_TEST_INTERNAL".to_string()));
+    }
+
+    #[test]
+    fn test_collect_host_envvars_includes_regular_vars() {
+        let _guard = crate::test_util::EnvGuard::set("MY_CUSTOM_VAR_FOR_TEST", "hello");
+        let vars = collect_host_envvars();
+        assert!(vars.contains(&"MY_CUSTOM_VAR_FOR_TEST".to_string()));
+    }
+
+    #[test]
+    fn test_normal_mode_docker_passes_all_host_envvars() {
+        // In normal mode, the envvar list should include arbitrary host env vars.
+        // Set a test var, collect all host vars, and verify it's in the docker command.
+        let _guard = crate::test_util::EnvGuard::set("ENVTEST_XYZ", "hello");
+        let envvars = collect_host_envvars();
+        assert!(envvars.contains(&"ENVTEST_XYZ".to_string()));
+
+        let config = BulkerConfig::test_default();
+        let pkg = PackageCommand {
+            command: "tool".to_string(),
+            docker_image: "img:latest".to_string(),
+            ..Default::default()
+        };
+        let cmd = build_docker_command(&config, &pkg, &[], &envvars, "", &[], false, "docker");
+        let cmd_str = cmd.join(" ");
+        assert!(cmd_str.contains("--env ENVTEST_XYZ"), "env var should be in docker cmd: {}", cmd_str);
+    }
+
+    #[test]
+    fn test_strict_env_docker_only_allowlisted_vars() {
+        // In strict-env mode, only config+manifest envvars should be passed.
+        // No EnvGuard needed — just pass a fixed allowlist to build_docker_command.
+        let allowlist = vec!["DISPLAY".to_string(), "LANG".to_string()];
+        let config = BulkerConfig::test_default();
+        let pkg = PackageCommand {
+            command: "tool".to_string(),
+            docker_image: "img:latest".to_string(),
+            ..Default::default()
+        };
+        let cmd = build_docker_command(&config, &pkg, &[], &allowlist, "", &[], false, "docker");
+        let cmd_str = cmd.join(" ");
+        assert!(cmd_str.contains("--env DISPLAY"), "allowlisted var should be present: {}", cmd_str);
+        assert!(cmd_str.contains("--env LANG"), "allowlisted var should be present: {}", cmd_str);
+        let env_count = cmd.iter().filter(|a| a.as_str() == "--env").count();
+        assert_eq!(env_count, 2, "should have exactly 2 env vars, got {}", env_count);
+    }
+
+    #[test]
+    fn test_apptainer_strict_env_has_cleanenv() {
+        // Set BULKER_STRICT_ENV so build_apptainer_command activates strict-env mode
+        let _guard = crate::test_util::EnvGuard::set("BULKER_STRICT_ENV", "1");
+        let mut config = BulkerConfig::test_default();
+        config.bulker.apptainer_image_folder = Some("/tmp/sif".to_string());
+        let pkg = PackageCommand {
+            command: "samtools".to_string(),
+            docker_image: "quay.io/biocontainers/samtools:1.9".to_string(),
+            ..Default::default()
+        };
+        let envvars = vec!["DISPLAY".to_string()];
+        let cmd = build_apptainer_command(&config, &pkg, &[], &envvars, &[], false, "apptainer");
+        assert!(cmd.contains(&"--cleanenv".to_string()), "strict-env apptainer should have --cleanenv: {:?}", cmd);
+    }
+
+    #[test]
+    fn test_apptainer_normal_mode_no_cleanenv() {
+        // Ensure BULKER_STRICT_ENV is not set
+        let _guard = crate::test_util::EnvGuard::remove("BULKER_STRICT_ENV");
+        let mut config = BulkerConfig::test_default();
+        config.bulker.apptainer_image_folder = Some("/tmp/sif".to_string());
+        let pkg = PackageCommand {
+            command: "samtools".to_string(),
+            docker_image: "quay.io/biocontainers/samtools:1.9".to_string(),
+            ..Default::default()
+        };
+        let cmd = build_apptainer_command(&config, &pkg, &[], &[], &[], false, "apptainer");
+        assert!(!cmd.contains(&"--cleanenv".to_string()), "normal mode should NOT have --cleanenv: {:?}", cmd);
+        assert!(!cmd.iter().any(|a| a.starts_with("--env")), "normal mode should NOT have explicit --env flags: {:?}", cmd);
+    }
+
+    #[test]
+    fn test_apptainer_strict_env_passes_allowlisted_vars() {
+        // Use a single EnvGuard to set both vars. We set BULKER_STRICT_ENV and the
+        // test var in one call chain to avoid mutex deadlock.
+        let _guard = crate::test_util::EnvGuard::set("BULKER_STRICT_ENV", "1");
+        // SAFETY: already hold ENV_MUTEX via _guard above
+        unsafe { std::env::set_var("MY_TEST_VAR_APT", "testval"); }
+        let mut config = BulkerConfig::test_default();
+        config.bulker.apptainer_image_folder = Some("/tmp/sif".to_string());
+        let pkg = PackageCommand {
+            command: "tool".to_string(),
+            docker_image: "img:latest".to_string(),
+            ..Default::default()
+        };
+        let envvars = vec!["MY_TEST_VAR_APT".to_string()];
+        let cmd = build_apptainer_command(&config, &pkg, &[], &envvars, &[], false, "apptainer");
+        // Clean up the extra var before assertions (still holding lock)
+        unsafe { std::env::remove_var("MY_TEST_VAR_APT"); }
+        assert!(cmd.contains(&"--env".to_string()), "strict-env should pass allowlisted vars: {:?}", cmd);
+        assert!(cmd.contains(&"MY_TEST_VAR_APT=testval".to_string()), "should pass var=value: {:?}", cmd);
     }
 
 }

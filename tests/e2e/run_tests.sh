@@ -84,7 +84,7 @@ test_load_and_build() {
 test_run_cowsay() {
     setup
 
-    output=$("$BULKERS" exec -c "$CONFIG" local/test_manifest:default -- cowsay "hello from bulker" 2>&1)
+    output=$("$BULKERS" exec -c "$CONFIG" bulker/test-crate:1.0.0 -- cowsay "hello from bulker" 2>&1)
 
     echo "$output" | grep -q "hello from bulker"
 }
@@ -94,7 +94,7 @@ test_run_exit_code() {
 
     # Run a command that doesn't exist - should return non-zero
     set +e
-    "$BULKERS" exec -c "$CONFIG" local/test_manifest:default -- nonexistent_command 2>/dev/null
+    "$BULKERS" exec -c "$CONFIG" bulker/test-crate:1.0.0 -- nonexistent_command 2>/dev/null
     rc=$?
     set -e
 
@@ -104,7 +104,7 @@ test_run_exit_code() {
 test_activate_echo_and_source() {
     setup
 
-    activate_output=$("$BULKERS" activate -c "$CONFIG" --echo local/test_manifest:default 2>&1)
+    activate_output=$("$BULKERS" activate -c "$CONFIG" --echo bulker/test-crate:1.0.0 2>&1)
 
     # Should contain export statements
     echo "$activate_output" | grep -q "export PATH="
@@ -120,18 +120,18 @@ test_run_strict_mode() {
 
     # Strict mode sets PATH to only the crate directory.
     # Verify via activate --echo that PATH contains only the crate path.
-    output=$("$BULKERS" activate -c "$CONFIG" --echo local/test_manifest:default 2>&1)
+    output=$("$BULKERS" activate -c "$CONFIG" --echo bulker/test-crate:1.0.0 2>&1)
     # The non-strict PATH should contain the crate folder AND existing PATH
     echo "$output" | grep -q "export PATH="
 
     # Now test non-strict exec works (baseline)
-    output=$("$BULKERS" exec -c "$CONFIG" local/test_manifest:default -- cowsay "strict test" 2>&1)
+    output=$("$BULKERS" exec -c "$CONFIG" bulker/test-crate:1.0.0 -- cowsay "strict test" 2>&1)
     echo "$output" | grep -q "strict test"
 
     # Verify strict flag is accepted and runs (it may fail because docker isn't
     # on the strict PATH, but the binary should not error on the flag itself)
     set +e
-    "$BULKERS" exec -c "$CONFIG" -s local/test_manifest:default -- cowsay "strict test" 2>/dev/null
+    "$BULKERS" exec -c "$CONFIG" -s bulker/test-crate:1.0.0 -- cowsay "strict test" 2>/dev/null
     rc=$?
     set -e
     # rc may be non-zero due to docker not being on strict PATH - that's expected
@@ -142,24 +142,24 @@ test_run_strict_mode() {
 test_lifecycle() {
     setup_no_load
 
-    # Install (local manifest gets cached as local/test_manifest:default)
+    # Install (local manifest gets cached as bulker/test-crate:1.0.0)
     "$BULKERS" crate install -c "$CONFIG" "$MANIFEST"
 
     # List shows the crate
     list_output=$("$BULKERS" crate list -c "$CONFIG" 2>&1)
-    echo "$list_output" | grep -q "test_manifest"
+    echo "$list_output" | grep -q "test-crate"
 
     # Inspect shows commands
-    inspect_output=$("$BULKERS" crate inspect -c "$CONFIG" local/test_manifest:default 2>&1)
+    inspect_output=$("$BULKERS" crate inspect -c "$CONFIG" bulker/test-crate:1.0.0 2>&1)
     echo "$inspect_output" | grep -q "cowsay"
     echo "$inspect_output" | grep -q "fortune"
 
     # Clean
-    "$BULKERS" crate clean -c "$CONFIG" local/test_manifest:default
+    "$BULKERS" crate clean -c "$CONFIG" bulker/test-crate:1.0.0
 
     # List no longer shows it
     list_output=$("$BULKERS" crate list -c "$CONFIG" 2>&1)
-    if echo "$list_output" | grep -q "local/test_manifest:default"; then
+    if echo "$list_output" | grep -q "bulker/test-crate:1.0.0"; then
         return 1
     fi
 }

@@ -35,7 +35,7 @@ pub fn get_new_path(config: &BulkerConfig, cratelist: &[CrateVars], strict: bool
     // Auto-fetch: ensure all manifests (and their imports) are cached
     for cv in cratelist {
         let mut visited = std::collections::HashSet::new();
-        crate::manifest_cache::ensure_cached_with_imports(config, cv, force, &mut visited, 0)?;
+        crate::manifest_cache::ensure_cached_with_imports(config, cv, force, false, &mut visited, 0)?;
     }
 
     // Resolve all crates including imports (reads from manifest cache, not config)
@@ -114,6 +114,7 @@ pub fn activate(
     cratelist: &[CrateVars],
     echo: bool,
     strict: bool,
+    strict_env: bool,
     prompt: bool,
     force: bool,
 ) -> Result<()> {
@@ -177,6 +178,9 @@ pub fn activate(
         if let Some(cp) = config_path {
             println!("export BULKERCFG=\"{}\"", cp.display());
         }
+        if strict_env {
+            println!("export BULKER_STRICT_ENV=1");
+        }
         println!("export BULKERPATH=\"{}\"", newpath);
         println!("export BULKER_SHIMDIR=\"{}\"", shimdir);
         if prompt {
@@ -193,6 +197,9 @@ pub fn activate(
         std::env::set_var("BULKERCRATE", &crate_id);
         if let Some(cp) = config_path {
             std::env::set_var("BULKERCFG", cp.to_string_lossy().as_ref());
+        }
+        if strict_env {
+            std::env::set_var("BULKER_STRICT_ENV", "1");
         }
         std::env::set_var("BULKERPATH", newpath);
         std::env::set_var("BULKER_SHIMDIR", shimdir);

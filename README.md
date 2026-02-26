@@ -135,6 +135,28 @@ bulker exec -s bulker/demo -- cowsay hi
 
 `bulker exec` is a binary command that works everywhere — CI pipelines, cron jobs, subprocess calls, AI agent tool use. No shell function or `eval` required.
 
+## Environment variable modes
+
+By default, bulker passes all host environment variables into containers. This mirrors how native commands work — your `LANG`, `DISPLAY`, `EDITOR`, and other env vars are available inside the container.
+
+For reproducible or isolated environments, use `--strict-env`:
+
+```bash
+bulker activate --strict-env bulker/demo
+bulker exec --strict-env bulker/demo -- cowsay hello
+```
+
+With `--strict-env`, containers start with a clean environment. Only variables listed in the `envvars` config key (and per-command `envvars` in the manifest) are passed through.
+
+| | PATH commands | Environment variables |
+|---|---|---|
+| **Normal mode** | All host commands + crate commands on PATH | All host env vars passed to container |
+| **`--strict` + `--strict-env`** | Only crate commands + `host_commands` on PATH | Only `envvars` allowlist passed to container |
+
+The `envvars` config key and per-command `envvars` in manifests define the allowlist used by `--strict-env`. They are ignored in normal mode (since all vars are passed anyway).
+
+For Docker, `--strict-env` controls which `--env` flags are added. For Apptainer, it adds `--cleanenv` and passes allowlisted vars via `--env`.
+
 ## macOS notes
 
 On Linux, bulker adds `--network=host` and mounts system volumes (`/etc/passwd`, etc.)

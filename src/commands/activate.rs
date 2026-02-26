@@ -53,11 +53,23 @@ CRATE FORMAT:
                 .help("Do not modify the shell prompt"),
         )
         .arg(
+            Arg::new("strict_env")
+                .long("strict-env")
+                .action(ArgAction::SetTrue)
+                .help("Clean container environment: only pass envvars allowlist (config + manifest)"),
+        )
+        .arg(
             Arg::new("force")
                 .short('f')
                 .long("force")
                 .action(ArgAction::SetTrue)
                 .help("Re-fetch manifests from registry even if cached"),
+        )
+        .arg(
+            Arg::new("name")
+                .short('n')
+                .long("name")
+                .help("Override crate identity for local manifests (e.g., bulker/biobase:0.1.0)"),
         )
 }
 
@@ -67,17 +79,19 @@ pub fn run(matches: &ArgMatches) -> Result<()> {
     let registry_paths = matches.get_one::<String>("crate_registry_paths").unwrap();
     let echo = matches.get_flag("echo");
     let strict = matches.get_flag("strict");
+    let strict_env = matches.get_flag("strict_env");
     let hide_prompt = matches.get_flag("hide-prompt");
     let force = matches.get_flag("force");
+    let name_override = matches.get_one::<String>("name").map(|s| s.as_str());
 
     // Detect local file path vs registry path
     let cratelist = if is_local_path(registry_paths) {
-        let (cv, manifest) = load_local_manifest(registry_paths)?;
+        let (cv, manifest) = load_local_manifest(registry_paths, name_override, &config.bulker.default_namespace)?;
         crate::manifest_cache::save_to_cache(&cv, &manifest)?;
         vec![cv]
     } else {
         parse_registry_paths(registry_paths, &config.bulker.default_namespace)?
     };
 
-    crate::activate::activate(&config, config_path.as_deref(), &cratelist, echo, strict, !hide_prompt, force)
+    crate::activate::activate(&config, config_path.as_deref(), &cratelist, echo, strict, strict_env, !hide_prompt, force)
 }

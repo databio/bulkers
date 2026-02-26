@@ -28,13 +28,13 @@ impl CrateVars {
 }
 
 /// Manifest file structure (top-level).
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Manifest {
     pub manifest: ManifestInner,
 }
 
 /// Inner manifest data.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ManifestInner {
     #[serde(default)]
     pub name: Option<String>,
@@ -214,21 +214,49 @@ pub(crate) fn is_local_path(s: &str) -> bool {
 }
 
 /// Load a local manifest file, returning the parsed Manifest and derived CrateVars.
-pub(crate) fn load_local_manifest(path: &str) -> Result<(CrateVars, Manifest)> {
+///
+/// Identity resolution priority:
+/// 1. `name_override` (from `--name` CLI flag) — always wins
+/// 2. `manifest.name` field — parsed with `parse_registry_path()`
+/// 3. No name — error
+///
+/// Tag: from name_override if it includes `:`, else manifest version, else "default".
+pub(crate) fn load_local_manifest(
+    path: &str,
+    name_override: Option<&str>,
+    default_namespace: &str,
+) -> Result<(CrateVars, Manifest)> {
     let file_path = std::path::Path::new(path);
     let contents = std::fs::read_to_string(file_path)
         .map_err(|e| anyhow::anyhow!("Failed to read local manifest '{}': {}", path, e))?;
     let manifest: Manifest = serde_yml::from_str(&contents)
         .map_err(|e| anyhow::anyhow!("Failed to parse local manifest '{}': {}", path, e))?;
 
-    let stem = file_path
-        .file_stem()
-        .map(|s| s.to_string_lossy().to_string())
-        .unwrap_or_else(|| "local".to_string());
-    let cv = CrateVars {
-        namespace: "local".to_string(),
-        crate_name: stem,
-        tag: "default".to_string(),
+    let cv = if let Some(name) = name_override {
+        // --name flag: parse it, and use its tag if present
+        parse_registry_path(name, default_namespace)?
+    } else if let Some(ref name) = manifest.manifest.name {
+        if name.trim().is_empty() {
+            bail!("Manifest has empty 'name' field. Add 'name: namespace/crate' or use --name on the CLI.");
+        }
+        if !name.contains('/') {
+            log::warn!(
+                "Manifest name '{}' has no namespace, defaulting to '{}/{}'. Add a namespace to the name field.",
+                name, default_namespace, name
+            );
+        }
+        let mut cv = parse_registry_path(name, default_namespace)?;
+        // If name_override didn't set the tag, use manifest version or "default"
+        if !name.contains(':') {
+            cv.tag = manifest.manifest.version
+                .as_ref()
+                .filter(|v| !v.trim().is_empty())
+                .map(|v| v.trim().to_string())
+                .unwrap_or_else(|| "default".to_string());
+        }
+        cv
+    } else {
+        bail!("Manifest has no 'name' field. Add 'name: namespace/crate' or use --name on the CLI.");
     };
 
     Ok((cv, manifest))
@@ -434,5 +462,54 @@ mod tests {
         assert_eq!(ns, "docker");
         assert_eq!(img, "python");
         assert_eq!(tag, "3.7.4");
+    }
+
+    fn write_temp_manifest(yaml: &str) -> tempfile::NamedTempFile {
+        use std::io::Write;
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        f.write_all(yaml.as_bytes()).unwrap();
+        f
+    }
+
+    #[test]
+    fn test_load_local_manifest_namespaced_name_with_version() {
+        let f = write_temp_manifest("manifest:\n  name: bulker/biobase\n  version: 0.1.0\n  commands: []\n");
+        let (cv, _) = load_local_manifest(f.path().to_str().unwrap(), None, "bulker").unwrap();
+        assert_eq!(cv.namespace, "bulker");
+        assert_eq!(cv.crate_name, "biobase");
+        assert_eq!(cv.tag, "0.1.0");
+    }
+
+    #[test]
+    fn test_load_local_manifest_bare_name_defaults_namespace() {
+        let f = write_temp_manifest("manifest:\n  name: biobase\n  commands: []\n");
+        let (cv, _) = load_local_manifest(f.path().to_str().unwrap(), None, "bulker").unwrap();
+        assert_eq!(cv.namespace, "bulker");
+        assert_eq!(cv.crate_name, "biobase");
+        assert_eq!(cv.tag, "default");
+    }
+
+    #[test]
+    fn test_load_local_manifest_name_override() {
+        let f = write_temp_manifest("manifest:\n  name: bulker/biobase\n  version: 0.1.0\n  commands: []\n");
+        let (cv, _) = load_local_manifest(f.path().to_str().unwrap(), Some("databio/custom:2.0"), "bulker").unwrap();
+        assert_eq!(cv.namespace, "databio");
+        assert_eq!(cv.crate_name, "custom");
+        assert_eq!(cv.tag, "2.0");
+    }
+
+    #[test]
+    fn test_load_local_manifest_no_name_no_override_errors() {
+        let f = write_temp_manifest("manifest:\n  commands: []\n");
+        let result = load_local_manifest(f.path().to_str().unwrap(), None, "bulker");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("no 'name' field"));
+    }
+
+    #[test]
+    fn test_load_local_manifest_no_version_defaults_tag() {
+        let f = write_temp_manifest("manifest:\n  name: bulker/biobase\n  commands: []\n");
+        let (cv, _) = load_local_manifest(f.path().to_str().unwrap(), None, "bulker").unwrap();
+        assert_eq!(cv.tag, "default");
     }
 }
