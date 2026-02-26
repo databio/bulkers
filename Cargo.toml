@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT"
 description = "Multi-container environment manager"
-repository = "https://github.com/databio/bulker"
+repository = "https://github.com/databio/bulkers"
 keywords = ["containers", "docker", "apptainer", "environment", "devtools"]
 categories = ["command-line-utilities", "development-tools"]
 

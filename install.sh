@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO="databio/bulker"
+REPO="databio/bulkers"
 INSTALL_DIR="$HOME/.local/bin"
 
 # Detect OS and architecture

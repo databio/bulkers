@@ -5,7 +5,7 @@ Multi-container environment manager.
 ## Install
 
 ```bash
-curl -sL https://raw.githubusercontent.com/databio/bulker/master/install.sh | bash
+curl -sL https://raw.githubusercontent.com/databio/bulkers/master/install.sh | bash
 ```
 
 This downloads the binary and adds a shell function to your `~/.bashrc` (or `~/.zshrc`) that enables `bulker activate` to modify your current shell and `bulker deactivate` to restore it.
@@ -16,13 +16,13 @@ This downloads the binary and adds a shell function to your `~/.bashrc` (or `~/.
 
 ```bash
 # Linux x86_64
-curl -sL https://github.com/databio/bulker/releases/latest/download/bulker-Linux-musl-x86_64.tar.gz | tar xz && mv bulker ~/.local/bin/
+curl -sL https://github.com/databio/bulkers/releases/latest/download/bulker-Linux-musl-x86_64.tar.gz | tar xz && mv bulker ~/.local/bin/
 
 # macOS Apple Silicon
-curl -sL https://github.com/databio/bulker/releases/latest/download/bulker-macOS-arm64.tar.gz | tar xz && mv bulker ~/.local/bin/
+curl -sL https://github.com/databio/bulkers/releases/latest/download/bulker-macOS-arm64.tar.gz | tar xz && mv bulker ~/.local/bin/
 
 # macOS Intel
-curl -sL https://github.com/databio/bulker/releases/latest/download/bulker-macOS-x86_64.tar.gz | tar xz && mv bulker ~/.local/bin/
+curl -sL https://github.com/databio/bulkers/releases/latest/download/bulker-macOS-x86_64.tar.gz | tar xz && mv bulker ~/.local/bin/
 ```
 
 2. Add to `~/.bashrc` (or `~/.zshrc`):
@@ -49,7 +49,7 @@ This builds the binary, copies it to `~/.local/bin/`, and adds the shell functio
 
 ## Usage
 
-Bulkers organizes commands into three groups:
+Bulker organizes commands into three groups:
 
 ### Daily use (top-level)
 
@@ -174,7 +174,7 @@ They're available whenever a crate is activated.
 
 ## Running services
 
-Bulkers is designed for CLI-style commands (run, get output, exit). For long-running
+Bulker is designed for CLI-style commands (run, get output, exit). For long-running
 services like databases, run in a separate terminal:
 
     bulker exec local/bedbase-test -- postgres
