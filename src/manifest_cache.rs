@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 use std::path::PathBuf;
 
 use crate::config::BulkerConfig;
+use crate::digest;
 use crate::manifest::{CrateVars, Manifest, load_remote_manifest, parse_docker_image_path, parse_registry_path};
 use crate::templates;
 
@@ -23,6 +24,44 @@ pub fn manifest_path(cv: &CrateVars) -> PathBuf {
         .join(&cv.crate_name)
         .join(&cv.tag)
         .join("manifest.yaml")
+}
+
+/// Get the path for a digest sidecar file next to the cached manifest.
+fn digest_sidecar_path(cv: &CrateVars, filename: &str) -> PathBuf {
+    cache_base_dir()
+        .join(&cv.namespace)
+        .join(&cv.crate_name)
+        .join(&cv.tag)
+        .join(filename)
+}
+
+/// Read a cached digest sidecar file. Returns None if not present.
+pub fn read_digest_sidecar(cv: &CrateVars, filename: &str) -> Option<String> {
+    let path = digest_sidecar_path(cv, filename);
+    std::fs::read_to_string(path).ok().map(|s| s.trim().to_string())
+}
+
+/// Write a digest sidecar file.
+pub fn write_digest_sidecar(cv: &CrateVars, filename: &str, digest: &str) -> Result<()> {
+    let path = digest_sidecar_path(cv, filename);
+    std::fs::write(&path, digest)
+        .with_context(|| format!("Failed to write digest sidecar: {}", path.display()))?;
+    Ok(())
+}
+
+/// Ensure the crate-manifest-digest sidecar exists. Computes and saves it if missing.
+pub fn ensure_crate_manifest_digest(cv: &CrateVars) -> Result<Option<String>> {
+    if let Some(d) = read_digest_sidecar(cv, "crate-manifest-digest") {
+        return Ok(Some(d));
+    }
+    // Load manifest and compute
+    if let Some(manifest) = load_cached(cv)? {
+        let result = digest::crate_manifest_digest(&manifest);
+        write_digest_sidecar(cv, "crate-manifest-digest", &result.digest)?;
+        Ok(Some(result.digest))
+    } else {
+        Ok(None)
+    }
 }
 
 /// Load a manifest from the filesystem cache. Returns None if not cached.
@@ -49,6 +88,12 @@ pub fn save_to_cache(cv: &CrateVars, manifest: &Manifest) -> Result<()> {
         .context("Failed to serialize manifest")?;
     std::fs::write(&path, &yaml)
         .with_context(|| format!("Failed to write manifest cache: {}", path.display()))?;
+
+    // Compute and store crate-manifest-digest sidecar
+    let result = digest::crate_manifest_digest(manifest);
+    let sidecar = path.parent().unwrap().join("crate-manifest-digest");
+    let _ = std::fs::write(&sidecar, &result.digest);
+
     Ok(())
 }
 

@@ -39,6 +39,19 @@ pub fn run(matches: &ArgMatches) -> Result<()> {
 
         println!("Crate: {}", cratevars.display_name());
 
+        // Show digests
+        let manifest_digest = crate::manifest_cache::ensure_crate_manifest_digest(cratevars)?;
+        if let Some(ref d) = manifest_digest {
+            println!("crate-manifest-digest:  {}", d);
+        }
+        let image_digest = crate::manifest_cache::read_digest_sidecar(cratevars, "crate-image-digest");
+        if let Some(ref d) = image_digest {
+            println!("crate-image-digest:     {}", d);
+        } else {
+            println!("crate-image-digest:     not available");
+        }
+        println!();
+
         let mut commands: Vec<&str> = manifest.manifest.commands.iter()
             .map(|c| c.command.as_str())
             .collect();

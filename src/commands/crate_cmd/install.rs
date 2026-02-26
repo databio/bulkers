@@ -2,6 +2,7 @@ use anyhow::Result;
 use clap::{Arg, ArgAction, ArgMatches, Command};
 
 use crate::config::{BulkerConfig, select_config};
+use crate::digest;
 use crate::manifest::{parse_registry_paths, CrateVars, Manifest};
 use crate::manifest_cache;
 
@@ -76,6 +77,7 @@ pub fn run(matches: &ArgMatches) -> Result<()> {
         manifest_cache::save_to_cache(&cv, &manifest)?;
         if build {
             manifest_cache::pull_images(&config, &manifest)?;
+            attempt_image_digest(&cv, &manifest);
         }
         println!("Cached: {}", cv.display_name());
     } else {
@@ -86,10 +88,22 @@ pub fn run(matches: &ArgMatches) -> Result<()> {
             if build {
                 let manifest = manifest_cache::load_cached(cv)?.unwrap();
                 manifest_cache::pull_images(&config, &manifest)?;
+                attempt_image_digest(cv, &manifest);
             }
             println!("Cached: {}", cv.display_name());
         }
     }
 
     Ok(())
+}
+
+/// Best-effort: resolve OCI digests and store the crate-image-digest sidecar.
+fn attempt_image_digest(cv: &CrateVars, manifest: &Manifest) {
+    let oci_digests = digest::resolve_oci_digests(manifest);
+    if let Some(result) = digest::crate_image_digest(manifest, &oci_digests) {
+        let _ = manifest_cache::write_digest_sidecar(cv, "crate-image-digest", &result.digest);
+        log::info!("Stored crate-image-digest: {}", result.digest);
+    } else {
+        log::debug!("Could not compute crate-image-digest (some images not resolved)");
+    }
 }

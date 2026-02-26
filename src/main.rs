@@ -4,6 +4,7 @@ compile_error!("bulkers requires a Unix-like operating system (Linux, macOS)");
 mod activate;
 mod commands;
 mod config;
+mod digest;
 mod imports;
 mod manifest;
 mod manifest_cache;

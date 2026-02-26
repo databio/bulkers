@@ -93,11 +93,12 @@ pub fn run(matches: &ArgMatches) -> Result<()> {
         return Ok(());
     }
 
-    // Group by namespace/crate_name -> Vec<tag>
-    let mut grouped: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    // Group by namespace/crate_name -> Vec<(tag, Option<digest>)>
+    let mut grouped: BTreeMap<String, Vec<(String, Option<String>)>> = BTreeMap::new();
     for (cv, _) in &cached {
         let key = format!("{}/{}", cv.namespace, cv.crate_name);
-        grouped.entry(key).or_default().push(cv.tag.clone());
+        let digest = manifest_cache::read_digest_sidecar(cv, "crate-manifest-digest");
+        grouped.entry(key).or_default().push((cv.tag.clone(), digest));
     }
 
     // Calculate column width
@@ -105,32 +106,51 @@ pub fn run(matches: &ArgMatches) -> Result<()> {
 
     println!();
 
-    for (full_name, mut tags) in grouped {
-        sort_versions_desc(&mut tags);
+    for (full_name, entries) in grouped {
+        // Sort by tag
+        let mut tag_list: Vec<String> = entries.iter().map(|(t, _)| t.clone()).collect();
+        sort_versions_desc(&mut tag_list);
+
+        // Build a map from tag -> digest for quick lookup
+        let digest_map: std::collections::HashMap<&str, Option<&str>> = entries
+            .iter()
+            .map(|(t, d)| (t.as_str(), d.as_deref()))
+            .collect();
 
         if show_versions {
             let mut first = true;
-            for tag in &tags {
+            for tag in &tag_list {
+                let digest_str = digest_map
+                    .get(tag.as_str())
+                    .and_then(|d| *d)
+                    .map(|d| &d[..12]) // show first 12 chars
+                    .unwrap_or("");
                 if first {
-                    println!("  {:<width$}  {}", full_name, tag, width = max_crate_width);
+                    println!("  {:<width$}  {:<12}  {}", full_name, tag, digest_str, width = max_crate_width);
                     first = false;
                 } else {
-                    println!("  {:<width$}  {}", "", tag, width = max_crate_width);
+                    println!("  {:<width$}  {:<12}  {}", "", tag, digest_str, width = max_crate_width);
                 }
             }
         } else {
-            let latest = tags.first().map(|s| s.as_str()).unwrap_or("default");
-            let extra = tags.len().saturating_sub(1);
+            let latest = tag_list.first().map(|s| s.as_str()).unwrap_or("default");
+            let digest_str = digest_map
+                .get(latest)
+                .and_then(|d| *d)
+                .map(|d| &d[..12])
+                .unwrap_or("");
+            let extra = tag_list.len().saturating_sub(1);
             if extra > 0 {
                 println!(
-                    "  {:<width$}  {}  (+{} more)",
+                    "  {:<width$}  {}  {}  (+{} more)",
                     full_name,
                     latest,
+                    digest_str,
                     extra,
                     width = max_crate_width
                 );
             } else {
-                println!("  {:<width$}  {}", full_name, latest, width = max_crate_width);
+                println!("  {:<width$}  {}  {}", full_name, latest, digest_str, width = max_crate_width);
             }
         }
     }

@@ -1,4 +1,6 @@
 pub mod clean;
+pub mod compare;
+pub mod digest;
 pub mod install;
 pub mod inspect;
 pub mod list;
@@ -22,6 +24,8 @@ pub fn create_cli() -> Command {
         .subcommand(list::create_cli())
         .subcommand(inspect::create_cli())
         .subcommand(clean::create_cli())
+        .subcommand(digest::create_cli())
+        .subcommand(compare::create_cli())
 }
 
 pub fn dispatch(matches: &ArgMatches) -> Result<()> {
@@ -30,6 +34,8 @@ pub fn dispatch(matches: &ArgMatches) -> Result<()> {
         Some(("list", sub_m)) => list::run(sub_m),
         Some(("inspect", sub_m)) => inspect::run(sub_m),
         Some(("clean", sub_m)) => clean::run(sub_m),
+        Some(("digest", sub_m)) => digest::run(sub_m),
+        Some(("compare", sub_m)) => compare::run(sub_m),
         _ => unreachable!(),
     }
 }
