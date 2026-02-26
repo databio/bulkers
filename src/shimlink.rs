@@ -1,4 +1,4 @@
-//! Busybox-pattern executable dispatch. When bulkers is invoked via a symlink
+//! Busybox-pattern executable dispatch. When bulker is invoked via a symlink
 //! (e.g., as "samtools"), argv[0] tells us which command to run. We look up the
 //! command in the crate manifest, build the docker/apptainer command dynamically,
 //! and exec it. No generated shell scripts needed.
@@ -14,12 +14,12 @@ use crate::process;
 
 // ─── argv[0] detection ───────────────────────────────────────────────────────
 
-/// Check if we were invoked as a shimlink (argv[0] != "bulkers").
+/// Check if we were invoked as a shimlink (argv[0] != "bulker").
 /// Returns Some(command_name) if so, None if normal CLI invocation.
 pub fn detect_shimlink_invocation() -> Option<String> {
     let argv0 = std::env::args().next()?;
     let filename = std::path::Path::new(&argv0).file_name()?.to_str()?;
-    if filename == "bulkers" {
+    if filename == "bulker" {
         None
     } else {
         Some(filename.to_string())
@@ -447,7 +447,7 @@ fn find_command_in_crate_with_imports(
 pub fn load_cached_manifest(_config: &BulkerConfig, cratevars: &CrateVars) -> Result<Manifest> {
     crate::manifest_cache::load_cached(cratevars)?
         .ok_or_else(|| anyhow::anyhow!(
-            "Crate '{}' is not cached. Run 'bulkers activate {}' to fetch it.",
+            "Crate '{}' is not cached. Run 'bulker activate {}' to fetch it.",
             cratevars.display_name(),
             cratevars.display_name()
         ))
@@ -455,36 +455,36 @@ pub fn load_cached_manifest(_config: &BulkerConfig, cratevars: &CrateVars) -> Re
 
 // ─── shimlink directory creation ─────────────────────────────────────────────
 
-/// Create a directory of symlinks pointing to the bulkers binary, one per command.
+/// Create a directory of symlinks pointing to the bulker binary, one per command.
 /// Also creates symlinks for host_commands pointing to the actual host binary.
 /// Returns the path to the created directory.
 pub fn create_shimlink_dir(manifest: &Manifest, dir: &Path) -> Result<()> {
     std::fs::create_dir_all(dir)
         .with_context(|| format!("Failed to create shimlink dir: {}", dir.display()))?;
 
-    let bulkers_path = std::env::current_exe()
-        .context("Failed to determine bulkers binary path")?;
+    let bulker_path = std::env::current_exe()
+        .context("Failed to determine bulker binary path")?;
 
     // Create symlinks for containerized commands
     for pkg in &manifest.manifest.commands {
         let link_path = dir.join(&pkg.command);
         let _ = std::fs::remove_file(&link_path);
-        std::os::unix::fs::symlink(&bulkers_path, &link_path).with_context(|| {
+        std::os::unix::fs::symlink(&bulker_path, &link_path).with_context(|| {
             format!(
                 "Failed to create shimlink: {} -> {}",
                 link_path.display(),
-                bulkers_path.display()
+                bulker_path.display()
             )
         })?;
 
         // Also create _command shell wrapper symlink
         let shell_link_path = dir.join(format!("_{}", pkg.command));
         let _ = std::fs::remove_file(&shell_link_path);
-        std::os::unix::fs::symlink(&bulkers_path, &shell_link_path).with_context(|| {
+        std::os::unix::fs::symlink(&bulker_path, &shell_link_path).with_context(|| {
             format!(
                 "Failed to create shell shimlink: {} -> {}",
                 shell_link_path.display(),
-                bulkers_path.display()
+                bulker_path.display()
             )
         })?;
     }
@@ -581,11 +581,11 @@ mod tests {
     use crate::manifest::{ManifestInner, Manifest};
 
     #[test]
-    fn test_detect_shimlink_invocation_returns_none_for_bulkers() {
+    fn test_detect_shimlink_invocation_returns_none_for_bulker() {
         // We cannot easily test argv[0] detection since it depends on the actual binary name.
         // Instead, test the logic directly.
-        let filename = "bulkers";
-        assert_eq!(filename == "bulkers", true);
+        let filename = "bulker";
+        assert_eq!(filename == "bulker", true);
     }
 
     #[test]
@@ -595,9 +595,9 @@ mod tests {
         let filename = path.file_name().unwrap().to_str().unwrap();
         assert_eq!(filename, "samtools");
 
-        let path2 = std::path::Path::new("/usr/local/bin/bulkers");
+        let path2 = std::path::Path::new("/usr/local/bin/bulker");
         let filename2 = path2.file_name().unwrap().to_str().unwrap();
-        assert_eq!(filename2, "bulkers");
+        assert_eq!(filename2, "bulker");
     }
 
     #[test]

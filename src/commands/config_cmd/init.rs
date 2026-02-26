@@ -9,10 +9,10 @@ pub fn create_cli() -> Command {
         .about("Initialize (or reset) bulker configuration")
         .after_help("\
 EXAMPLES:
-  bulkers config init
-  bulkers config init -c ~/.config/bulker/bulker_config.yaml
-  bulkers config init -c ~/bulker_config.yaml -e apptainer
-  bulkers config init --force                               # overwrite existing config")
+  bulker config init
+  bulker config init -c ~/.config/bulker/bulker_config.yaml
+  bulker config init -c ~/bulker_config.yaml -e apptainer
+  bulker config init --force                               # overwrite existing config")
         .arg(
             Arg::new("engine")
                 .short('e')

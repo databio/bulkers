@@ -11,8 +11,8 @@ pub fn create_cli() -> Command {
         .about("Compare two cached crates")
         .after_help("\
 EXAMPLES:
-  bulkers crate compare databio/peppro:1.0.13 databio/peppro:1.0.14
-  bulkers crate compare databio/peppro:1.0.13 databio/peppro:1.0.14 --json")
+  bulker crate compare databio/peppro:1.0.13 databio/peppro:1.0.14
+  bulker crate compare databio/peppro:1.0.13 databio/peppro:1.0.14 --json")
         .arg(
             Arg::new("crate_a")
                 .required(true)

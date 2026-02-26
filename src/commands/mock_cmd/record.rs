@@ -14,13 +14,13 @@ pub fn create_cli() -> Command {
         .about("Record container command outputs for mock replay")
         .after_help("\
 EXAMPLES:
-  bulkers mock record databio/pepatac:1.0.13 outputs.json -- python pipeline.py sample1
-  bulkers mock record bulker/demo outputs.json -- cowsay hello
+  bulker mock record databio/pepatac:1.0.13 outputs.json -- python pipeline.py sample1
+  bulker mock record bulker/demo outputs.json -- cowsay hello
 
 The record subcommand runs a pipeline command with recording shims that capture
 stdout, stderr, return codes, and newly created files for each container command.
 The recordings are appended to the specified outputs.json file for later use with
-'bulkers mock run'.")
+'bulker mock run'.")
         .arg(
             Arg::new("crate_registry_paths")
                 .required(true)

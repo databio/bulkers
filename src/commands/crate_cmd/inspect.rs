@@ -10,9 +10,9 @@ pub fn create_cli() -> Command {
         .about("Show commands available in a cached crate")
         .after_help("\
 EXAMPLES:
-  bulkers crate inspect                         # inspect the currently active crate
-  bulkers crate inspect bulker/demo
-  bulkers crate inspect databio/pepatac:1.0.13")
+  bulker crate inspect                         # inspect the currently active crate
+  bulker crate inspect bulker/demo
+  bulker crate inspect databio/pepatac:1.0.13")
         .arg(
             Arg::new("crate_registry_paths")
                 .help("Crate to inspect (defaults to active crate from BULKERCRATE)"),
@@ -32,7 +32,7 @@ pub fn run(matches: &ArgMatches) -> Result<()> {
     for cratevars in &cratelist {
         let manifest = manifest_cache::load_cached(cratevars)?
             .ok_or_else(|| anyhow::anyhow!(
-                "Crate '{}' is not cached. Run 'bulkers activate {}' to fetch it.",
+                "Crate '{}' is not cached. Run 'bulker activate {}' to fetch it.",
                 cratevars.display_name(), cratevars.display_name()
             ))?;
 

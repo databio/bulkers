@@ -43,7 +43,7 @@ fn resolve_crate_vars(
     // Load imports from the cached manifest (not from config crates map)
     let manifest = crate::manifest_cache::load_cached(cratevars)?
         .ok_or_else(|| anyhow::anyhow!(
-            "Crate '{}' is not cached. Run 'bulkers activate' to fetch it.",
+            "Crate '{}' is not cached. Run 'bulker activate' to fetch it.",
             key
         ))?;
 

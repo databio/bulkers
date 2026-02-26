@@ -1,22 +1,22 @@
 # CLAUDE.md
 
-Bulkers is a multi-container environment manager. It makes containerized CLI tools act like native commands on your PATH. Load a crate (a YAML manifest of containers), activate it, and every tool becomes available. Supports Docker and Apptainer.
+Bulker is a multi-container environment manager. It makes containerized CLI tools act like native commands on your PATH. Load a crate (a YAML manifest of containers), activate it, and every tool becomes available. Supports Docker and Apptainer.
 
 ## Core workflow
 
 ```bash
-bulkers config init                    # create config (detects docker/apptainer)
-bulkers crate install demo             # fetch and cache a crate manifest
-bulkers activate bulker/demo           # put crate commands on PATH
-bulkers deactivate                     # restore original PATH
-bulkers exec bulker/demo -- cowsay hi  # one-shot (no shell function needed)
+bulker config init                    # create config (detects docker/apptainer)
+bulker crate install demo             # fetch and cache a crate manifest
+bulker activate bulker/demo           # put crate commands on PATH
+bulker deactivate                     # restore original PATH
+bulker exec bulker/demo -- cowsay hi  # one-shot (no shell function needed)
 ```
 
-`activate`/`deactivate` are shell functions (require `eval "$(bulkers init-shell bash)"`). `exec` is a binary command that works everywhere.
+`activate`/`deactivate` are shell functions (require `eval "$(bulker init-shell bash)"`). `exec` is a binary command that works everywhere.
 
 ## Key concept: shimlinks
 
-Bulkers uses a busybox pattern. `activate` creates a temp directory of symlinks (e.g., `samtools` -> `bulkers`). When invoked via symlink, bulkers detects the command name from argv[0], looks it up in the manifest, and constructs the `docker run`/`apptainer exec` command dynamically. No generated shell scripts.
+Bulker uses a busybox pattern. `activate` creates a temp directory of symlinks (e.g., `samtools` -> `bulker`). When invoked via symlink, bulker detects the command name from argv[0], looks it up in the manifest, and constructs the `docker run`/`apptainer exec` command dynamically. No generated shell scripts.
 
 ## Manifest format
 

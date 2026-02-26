@@ -3,12 +3,12 @@ use std::path::PathBuf;
 use std::process::Command;
 use tempfile::TempDir;
 
-fn bulkers_bin() -> PathBuf {
+fn bulker_bin() -> PathBuf {
     // Find the built binary
     let mut path = std::env::current_exe().unwrap();
     path.pop(); // Remove test binary name
     path.pop(); // Remove deps/
-    path.push("bulkers");
+    path.push("bulker");
     path
 }
 
@@ -32,9 +32,9 @@ fn create_test_manifest(dir: &std::path::Path) -> PathBuf {
     path
 }
 
-/// Helper: run bulkers with XDG_CONFIG_HOME set to isolate manifest cache.
-fn bulkers_cmd(xdg_home: &std::path::Path) -> Command {
-    let mut cmd = Command::new(bulkers_bin());
+/// Helper: run bulker with XDG_CONFIG_HOME set to isolate manifest cache.
+fn bulker_cmd(xdg_home: &std::path::Path) -> Command {
+    let mut cmd = Command::new(bulker_bin());
     cmd.env("XDG_CONFIG_HOME", xdg_home);
     cmd
 }
@@ -43,7 +43,7 @@ fn bulkers_cmd(xdg_home: &std::path::Path) -> Command {
 fn init_config(tmp: &TempDir) -> PathBuf {
     let config_path = tmp.path().join("bulker_config.yaml");
 
-    bulkers_cmd(tmp.path())
+    bulker_cmd(tmp.path())
         .args(["config", "init", "-c", config_path.to_str().unwrap()])
         .output()
         .expect("failed to run config init");
@@ -54,7 +54,7 @@ fn init_config(tmp: &TempDir) -> PathBuf {
 /// Helper: install a test crate from a local manifest (populates manifest cache).
 fn install_test_crate(tmp: &TempDir, config_path: &std::path::Path) {
     let manifest_path = create_test_manifest(tmp.path());
-    let output = bulkers_cmd(tmp.path())
+    let output = bulker_cmd(tmp.path())
         .args([
             "crate", "install",
             "-c", config_path.to_str().unwrap(),
@@ -72,7 +72,7 @@ fn test_config_init_creates_config() {
     let tmp = TempDir::new().unwrap();
     let config_path = tmp.path().join("bulker_config.yaml");
 
-    let output = bulkers_cmd(tmp.path())
+    let output = bulker_cmd(tmp.path())
         .args(["config", "init", "-c", config_path.to_str().unwrap()])
         .output()
         .expect("failed to run config init");
@@ -100,7 +100,7 @@ fn test_crate_install_caches_manifest() {
     let manifest_path = create_test_manifest(tmp.path());
 
     // Install using local file path -- now caches to manifest cache dir, not crate folder
-    let output = bulkers_cmd(tmp.path())
+    let output = bulker_cmd(tmp.path())
         .args([
             "crate", "install",
             "-c", config_path.to_str().unwrap(),
@@ -122,7 +122,7 @@ fn test_crate_list() {
     install_test_crate(&tmp, &config_path);
 
     // List
-    let output = bulkers_cmd(tmp.path())
+    let output = bulker_cmd(tmp.path())
         .args(["crate", "list", "-c", config_path.to_str().unwrap()])
         .output()
         .unwrap();
@@ -139,7 +139,7 @@ fn test_crate_inspect() {
     install_test_crate(&tmp, &config_path);
 
     // Inspect the cached crate (local/test_manifest:default)
-    let output = bulkers_cmd(tmp.path())
+    let output = bulker_cmd(tmp.path())
         .args(["crate", "inspect", "-c", config_path.to_str().unwrap(), "local/test_manifest:default"])
         .output()
         .unwrap();
@@ -158,7 +158,7 @@ fn test_activate_echo_mode() {
     install_test_crate(&tmp, &config_path);
 
     // Activate with --echo using the cached crate name
-    let output = bulkers_cmd(tmp.path())
+    let output = bulker_cmd(tmp.path())
         .args([
             "activate",
             "-c", config_path.to_str().unwrap(),
@@ -172,8 +172,8 @@ fn test_activate_echo_mode() {
     assert!(stdout.contains("export BULKERCRATE="), "missing BULKERCRATE export: {}", stdout);
     assert!(stdout.contains("export BULKERPATH="), "missing BULKERPATH export: {}", stdout);
     assert!(stdout.contains("export PATH="), "missing PATH export: {}", stdout);
-    // With shimlinks, PATH contains /tmp/bulkers_* shimlink dir
-    assert!(stdout.contains("/tmp/bulkers_"), "PATH doesn't contain shimlink dir: {}", stdout);
+    // With shimlinks, PATH contains /tmp/bulker_* shimlink dir
+    assert!(stdout.contains("/tmp/bulker_"), "PATH doesn't contain shimlink dir: {}", stdout);
 }
 
 #[test]
@@ -183,7 +183,7 @@ fn test_activate_local_manifest() {
     let manifest_path = create_test_manifest(tmp.path());
 
     // Activate a local manifest file directly (no prior install needed)
-    let output = bulkers_cmd(tmp.path())
+    let output = bulker_cmd(tmp.path())
         .args([
             "activate",
             "-c", config_path.to_str().unwrap(),
@@ -197,7 +197,7 @@ fn test_activate_local_manifest() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "activate local manifest failed: {}\n{}", stderr, stdout);
     assert!(stdout.contains("export PATH="), "missing PATH export: {}", stdout);
-    assert!(stdout.contains("/tmp/bulkers_"), "PATH doesn't contain shimlink dir: {}", stdout);
+    assert!(stdout.contains("/tmp/bulker_"), "PATH doesn't contain shimlink dir: {}", stdout);
 }
 
 #[test]
@@ -207,7 +207,7 @@ fn test_activate_force() {
     install_test_crate(&tmp, &config_path);
 
     // Activate with --force should succeed with already-cached crate
-    let output = bulkers_cmd(tmp.path())
+    let output = bulker_cmd(tmp.path())
         .args([
             "activate",
             "-c", config_path.to_str().unwrap(),
@@ -233,7 +233,7 @@ fn test_crate_clean_specific() {
     install_test_crate(&tmp, &config_path);
 
     // Clean the specific crate
-    let output = bulkers_cmd(tmp.path())
+    let output = bulker_cmd(tmp.path())
         .args(["crate", "clean", "-c", config_path.to_str().unwrap(), "local/test_manifest:default"])
         .output()
         .unwrap();
@@ -243,7 +243,7 @@ fn test_crate_clean_specific() {
     assert!(stdout.contains("Removed:"), "clean should report removal: {}", stdout);
 
     // Verify no longer in list
-    let list_output = bulkers_cmd(tmp.path())
+    let list_output = bulker_cmd(tmp.path())
         .args(["crate", "list", "-c", config_path.to_str().unwrap()])
         .output()
         .unwrap();
@@ -259,7 +259,7 @@ fn test_crate_clean_all() {
     install_test_crate(&tmp, &config_path);
 
     // Clean all cached crates
-    let output = bulkers_cmd(tmp.path())
+    let output = bulker_cmd(tmp.path())
         .args(["crate", "clean", "-c", config_path.to_str().unwrap(), "--all"])
         .output()
         .unwrap();
@@ -267,7 +267,7 @@ fn test_crate_clean_all() {
     assert!(output.status.success(), "crate clean --all failed: {}", String::from_utf8_lossy(&output.stderr));
 
     // Verify empty list
-    let list_output = bulkers_cmd(tmp.path())
+    let list_output = bulker_cmd(tmp.path())
         .args(["crate", "list", "-c", config_path.to_str().unwrap()])
         .output()
         .unwrap();
@@ -280,13 +280,13 @@ fn test_config_get_set() {
     let tmp = TempDir::new().unwrap();
     let config_path = tmp.path().join("bulker_config.yaml");
 
-    bulkers_cmd(tmp.path())
+    bulker_cmd(tmp.path())
         .args(["config", "init", "-c", config_path.to_str().unwrap()])
         .output()
         .unwrap();
 
     // Get a value
-    let output = bulkers_cmd(tmp.path())
+    let output = bulker_cmd(tmp.path())
         .args(["config", "get", "-c", config_path.to_str().unwrap(), "container_engine"])
         .output()
         .unwrap();
@@ -295,14 +295,14 @@ fn test_config_get_set() {
     assert!(stdout.trim() == "docker" || stdout.trim() == "apptainer");
 
     // Set envvars
-    let output = bulkers_cmd(tmp.path())
+    let output = bulker_cmd(tmp.path())
         .args(["config", "set", "-c", config_path.to_str().unwrap(), "envvars=HOME,DISPLAY,MY_VAR"])
         .output()
         .unwrap();
     assert!(output.status.success());
 
     // Get envvars back
-    let output = bulkers_cmd(tmp.path())
+    let output = bulker_cmd(tmp.path())
         .args(["config", "get", "-c", config_path.to_str().unwrap(), "envvars"])
         .output()
         .unwrap();
@@ -310,7 +310,7 @@ fn test_config_get_set() {
     assert!(stdout.contains("MY_VAR"), "MY_VAR not in envvars: {}", stdout);
 
     // Config show
-    let output = bulkers_cmd(tmp.path())
+    let output = bulker_cmd(tmp.path())
         .args(["config", "show", "-c", config_path.to_str().unwrap()])
         .output()
         .unwrap();
@@ -325,7 +325,7 @@ fn test_config_add_remove() {
     let config_path = init_config(&tmp);
 
     // Add an envvar
-    let output = bulkers_cmd(tmp.path())
+    let output = bulker_cmd(tmp.path())
         .args(["config", "add", "-c", config_path.to_str().unwrap(), "envvars", "MY_CUSTOM_VAR"])
         .output()
         .unwrap();
@@ -334,7 +334,7 @@ fn test_config_add_remove() {
     assert!(stdout.contains("Added 'MY_CUSTOM_VAR' to envvars"), "unexpected output: {}", stdout);
 
     // Verify it's there
-    let output = bulkers_cmd(tmp.path())
+    let output = bulker_cmd(tmp.path())
         .args(["config", "get", "-c", config_path.to_str().unwrap(), "envvars"])
         .output()
         .unwrap();
@@ -342,7 +342,7 @@ fn test_config_add_remove() {
     assert!(stdout.contains("MY_CUSTOM_VAR"), "added var not in envvars: {}", stdout);
 
     // Add duplicate should skip
-    let output = bulkers_cmd(tmp.path())
+    let output = bulker_cmd(tmp.path())
         .args(["config", "add", "-c", config_path.to_str().unwrap(), "envvars", "MY_CUSTOM_VAR"])
         .output()
         .unwrap();
@@ -351,7 +351,7 @@ fn test_config_add_remove() {
     assert!(stdout.contains("already in envvars"), "duplicate add should report already exists: {}", stdout);
 
     // Remove it
-    let output = bulkers_cmd(tmp.path())
+    let output = bulker_cmd(tmp.path())
         .args(["config", "remove", "-c", config_path.to_str().unwrap(), "envvars", "MY_CUSTOM_VAR"])
         .output()
         .unwrap();
@@ -360,7 +360,7 @@ fn test_config_add_remove() {
     assert!(stdout.contains("Removed 'MY_CUSTOM_VAR' from envvars"), "unexpected output: {}", stdout);
 
     // Verify it's gone
-    let output = bulkers_cmd(tmp.path())
+    let output = bulker_cmd(tmp.path())
         .args(["config", "get", "-c", config_path.to_str().unwrap(), "envvars"])
         .output()
         .unwrap();
@@ -368,7 +368,7 @@ fn test_config_add_remove() {
     assert!(!stdout.contains("MY_CUSTOM_VAR"), "removed var still in envvars: {}", stdout);
 
     // Remove non-existent should not error
-    let output = bulkers_cmd(tmp.path())
+    let output = bulker_cmd(tmp.path())
         .args(["config", "remove", "-c", config_path.to_str().unwrap(), "envvars", "NONEXISTENT_VAR"])
         .output()
         .unwrap();
@@ -383,7 +383,7 @@ fn test_config_add_rejects_scalar_key() {
     let config_path = init_config(&tmp);
 
     // Trying to add to a scalar key should fail
-    let output = bulkers_cmd(tmp.path())
+    let output = bulker_cmd(tmp.path())
         .args(["config", "add", "-c", config_path.to_str().unwrap(), "container_engine", "podman"])
         .output()
         .unwrap();

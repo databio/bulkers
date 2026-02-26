@@ -8,9 +8,9 @@ pub fn create_cli() -> Command {
         .about("Get a configuration value")
         .after_help("\
 EXAMPLES:
-  bulkers config get envvars
-  bulkers config get container_engine
-  bulkers config get shell_path
+  bulker config get envvars
+  bulker config get container_engine
+  bulker config get shell_path
 
 SUPPORTED KEYS:
   container_engine, default_namespace, registry_url,

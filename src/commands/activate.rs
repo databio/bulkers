@@ -40,13 +40,13 @@ pub fn create_cli() -> Command {
         .about("Put crate commands on PATH")
         .after_help("\
 EXAMPLES:
-  bulkers activate bulker/demo
-  bulkers activate databio/pepatac:1.0.13
-  bulkers activate bulker/demo,bulker/pi        # multiple crates
-  bulkers activate demo                          # uses default namespace
-  bulkers activate -s bulker/demo                # strict: only crate commands in PATH
-  bulkers activate --echo bulker/demo            # print exports instead of launching shell
-  bulkers activate ./my-pipeline.yaml            # activate from local manifest file
+  bulker activate bulker/demo
+  bulker activate databio/pepatac:1.0.13
+  bulker activate bulker/demo,bulker/pi        # multiple crates
+  bulker activate demo                          # uses default namespace
+  bulker activate -s bulker/demo                # strict: only crate commands in PATH
+  bulker activate --echo bulker/demo            # print exports instead of launching shell
+  bulker activate ./my-pipeline.yaml            # activate from local manifest file
 
 CRATE FORMAT:
   namespace/crate:tag    Full path (e.g., databio/pepatac:1.0.13)

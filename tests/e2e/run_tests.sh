@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 #
-# End-to-end tests for bulkers. Requires Docker and the bulkers binary.
+# End-to-end tests for bulker. Requires Docker and the bulker binary.
 #
 # Usage:
-#   ./tests/e2e/run_tests.sh [path/to/bulkers]
+#   ./tests/e2e/run_tests.sh [path/to/bulker]
 #
-# If no binary path is given, assumes "bulkers" is on PATH.
+# If no binary path is given, assumes "bulker" is on PATH.
 
 set -euo pipefail
 
-BULKERS="${1:-bulkers}"
+BULKERS="${1:-bulker}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MANIFEST="$SCRIPT_DIR/test_manifest.yaml"
 
@@ -84,9 +84,9 @@ test_load_and_build() {
 test_run_cowsay() {
     setup
 
-    output=$("$BULKERS" exec -c "$CONFIG" local/test_manifest:default -- cowsay "hello from bulkers" 2>&1)
+    output=$("$BULKERS" exec -c "$CONFIG" local/test_manifest:default -- cowsay "hello from bulker" 2>&1)
 
-    echo "$output" | grep -q "hello from bulkers"
+    echo "$output" | grep -q "hello from bulker"
 }
 
 test_run_exit_code() {
@@ -135,7 +135,7 @@ test_run_strict_mode() {
     rc=$?
     set -e
     # rc may be non-zero due to docker not being on strict PATH - that's expected
-    # The key assertion is that bulkers accepted the -s flag (it would exit 2 for bad args)
+    # The key assertion is that bulker accepted the -s flag (it would exit 2 for bad args)
     [ "$rc" -ne 2 ]
 }
 
@@ -182,7 +182,7 @@ echo ""
 
 # Verify prerequisites
 if ! command -v "$BULKERS" >/dev/null 2>&1 && [ ! -x "$BULKERS" ]; then
-    echo "ERROR: bulkers binary not found: $BULKERS"
+    echo "ERROR: bulker binary not found: $BULKERS"
     exit 1
 fi
 

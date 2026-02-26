@@ -11,12 +11,12 @@ pub fn create_cli() -> Command {
         .about("Replay pre-recorded container outputs (no containers needed)")
         .after_help("\
 EXAMPLES:
-  bulkers mock run databio/pepatac:1.0.13 outputs.json
-  bulkers mock run bulker/demo outputs.json --echo
-  bulkers mock run -s bulker/demo outputs.json    # strict: only mock commands in PATH
+  bulker mock run databio/pepatac:1.0.13 outputs.json
+  bulker mock run bulker/demo outputs.json --echo
+  bulker mock run -s bulker/demo outputs.json    # strict: only mock commands in PATH
 
 The run subcommand loads a crate using pre-recorded outputs from an outputs.json
-file instead of real containers. Use 'bulkers mock record' to create the outputs.json.")
+file instead of real containers. Use 'bulker mock record' to create the outputs.json.")
         .arg(
             Arg::new("crate_registry_paths")
                 .required(true)
@@ -62,7 +62,7 @@ pub fn run(matches: &ArgMatches) -> Result<()> {
 
     if !outputs_abs.exists() {
         anyhow::bail!(
-            "Outputs file not found: {}. Use 'bulkers mock record' to create one.",
+            "Outputs file not found: {}. Use 'bulker mock record' to create one.",
             outputs_abs.display()
         );
     }

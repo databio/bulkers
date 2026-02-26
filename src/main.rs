@@ -1,5 +1,5 @@
 #[cfg(not(unix))]
-compile_error!("bulkers requires a Unix-like operating system (Linux, macOS)");
+compile_error!("bulker requires a Unix-like operating system (Linux, macOS)");
 
 mod activate;
 mod commands;
@@ -19,7 +19,7 @@ use clap::{Arg, ArgAction, Command};
 
 pub mod consts {
     pub const VERSION: &str = env!("CARGO_PKG_VERSION");
-    pub const BIN_NAME: &str = "bulkers";
+    pub const BIN_NAME: &str = "bulker";
 }
 
 pub fn build_parser() -> Command {
@@ -47,7 +47,7 @@ pub fn build_parser() -> Command {
 }
 
 fn main() -> Result<()> {
-    // Shimlink dispatch: if invoked as a symlink (argv[0] != "bulkers"),
+    // Shimlink dispatch: if invoked as a symlink (argv[0] != "bulker"),
     // dispatch directly to the container command without clap parsing.
     if let Some(cmd_name) = shimlink::detect_shimlink_invocation() {
         let args: Vec<String> = std::env::args().skip(1).collect();

@@ -24,6 +24,6 @@ pub fn run(matches: &ArgMatches) -> Result<()> {
     };
 
     let mut cmd = crate::build_parser();
-    generate(shell, &mut cmd, "bulkers", &mut io::stdout());
+    generate(shell, &mut cmd, "bulker", &mut io::stdout());
     Ok(())
 }

@@ -14,7 +14,7 @@ use crate::manifest::CrateVars;
 use crate::shimlink;
 
 /// Build the new PATH using shimlink directories.
-/// Creates a temp directory with symlinks to the bulkers binary for each command,
+/// Creates a temp directory with symlinks to the bulker binary for each command,
 /// then returns the PATH string with the shimlink dir prepended.
 /// Auto-fetches manifests from the registry if not cached locally.
 pub fn get_new_path(config: &BulkerConfig, cratelist: &[CrateVars], strict: bool, force: bool) -> Result<String> {
@@ -24,7 +24,7 @@ pub fn get_new_path(config: &BulkerConfig, cratelist: &[CrateVars], strict: bool
         cv.display_name().hash(&mut hasher);
     }
     let hash = hasher.finish();
-    let shimdir = PathBuf::from(format!("/tmp/bulkers_{:016x}", hash));
+    let shimdir = PathBuf::from(format!("/tmp/bulker_{:016x}", hash));
 
     // Auto-fetch: ensure all manifests (and their imports) are cached
     for cv in cratelist {

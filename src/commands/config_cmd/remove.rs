@@ -9,8 +9,8 @@ pub fn create_cli() -> Command {
         .about("Remove an entry from a list config field")
         .after_help("\
 EXAMPLES:
-  bulkers config remove envvars DISPLAY
-  bulkers config remove volumes /data")
+  bulker config remove envvars DISPLAY
+  bulker config remove volumes /data")
         .arg(
             Arg::new("key")
                 .required(true)
@@ -25,7 +25,7 @@ EXAMPLES:
 
 pub fn run(matches: &ArgMatches) -> Result<()> {
     let (mut config, config_path) = load_config(matches.get_one::<String>("config").map(|s| s.as_str()))?;
-    let config_path = config_path.context("No config file to write to. Run `bulkers config init` first.")?;
+    let config_path = config_path.context("No config file to write to. Run `bulker config init` first.")?;
     let key = matches.get_one::<String>("key").unwrap();
     let value = matches.get_one::<String>("value").unwrap();
 

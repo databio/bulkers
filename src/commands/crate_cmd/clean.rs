@@ -10,8 +10,8 @@ pub fn create_cli() -> Command {
         .about("Remove cached crate manifests")
         .after_help("\
 EXAMPLES:
-  bulkers crate clean databio/pepatac:1.0.13    # remove a specific cached manifest
-  bulkers crate clean --all                     # clear entire manifest cache")
+  bulker crate clean databio/pepatac:1.0.13    # remove a specific cached manifest
+  bulker crate clean --all                     # clear entire manifest cache")
         .arg(
             Arg::new("crate_registry_paths")
                 .help("Crate(s) to clean (comma-separated for multiple)"),

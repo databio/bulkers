@@ -11,9 +11,9 @@ pub fn create_cli() -> Command {
         .about("Show content-addressable digest for a cached crate")
         .after_help("\
 EXAMPLES:
-  bulkers crate digest databio/peppro:1.0.14
-  bulkers crate digest databio/peppro:1.0.14 --verbose
-  bulkers crate digest databio/peppro:1.0.14 --resolve")
+  bulker crate digest databio/peppro:1.0.14
+  bulker crate digest databio/peppro:1.0.14 --verbose
+  bulker crate digest databio/peppro:1.0.14 --resolve")
         .arg(
             Arg::new("crate_registry_path")
                 .required(true)
@@ -43,7 +43,7 @@ pub fn run(matches: &ArgMatches) -> Result<()> {
     let cv = parse_registry_path(registry_path, &config.bulker.default_namespace);
     let manifest = manifest_cache::load_cached(&cv)?
         .ok_or_else(|| anyhow::anyhow!(
-            "Crate '{}' is not cached. Run 'bulkers crate install {}' first.",
+            "Crate '{}' is not cached. Run 'bulker crate install {}' first.",
             cv.display_name(), cv.display_name()
         ))?;
 

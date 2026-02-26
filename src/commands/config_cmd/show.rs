@@ -8,8 +8,8 @@ pub fn create_cli() -> Command {
         .about("Display current configuration")
         .after_help("\
 EXAMPLES:
-  bulkers config show
-  bulkers config show --effective")
+  bulker config show
+  bulker config show --effective")
         .arg(
             Arg::new("effective")
                 .long("effective")

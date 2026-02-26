@@ -7,9 +7,9 @@ pub fn create_cli() -> Command {
         .hide(true)
         .after_help("\
 EXAMPLES:
-  eval \"$(bulkers init-shell bash)\"     # add to ~/.bashrc
-  eval \"$(bulkers init-shell zsh)\"      # add to ~/.zshrc
-  bulkers init-shell bash                # print the function to stdout")
+  eval \"$(bulker init-shell bash)\"     # add to ~/.bashrc
+  eval \"$(bulker init-shell zsh)\"      # add to ~/.zshrc
+  bulker init-shell bash                # print the function to stdout")
         .arg(
             Arg::new("shell")
                 .required(true)
@@ -30,13 +30,13 @@ pub fn run(matches: &ArgMatches) -> Result<()> {
     Ok(())
 }
 
-const SHELL_FUNCTION_BASH: &str = r#"# >>> bulkers initialize >>>
-bulkers() {
+const SHELL_FUNCTION_BASH: &str = r#"# >>> bulker initialize >>>
+bulker() {
   case "$1" in
     activate)
       shift
       _BULKER_OLD_PS1="$PS1"
-      eval "$(\command bulkers activate --echo "$@")"
+      eval "$(\command bulker activate --echo "$@")"
       if [ -n "$BULKERCRATE" ]; then
         PS1="(\[\033[01;93m\]${BULKERCRATE}\[\033[00m\]) ${_BULKER_OLD_PS1}"
       fi
@@ -51,21 +51,21 @@ bulkers() {
       fi
       ;;
     *)
-      \command bulkers "$@"
+      \command bulker "$@"
       ;;
   esac
 }
-eval "$(\command bulkers completions bash)"
-# <<< bulkers initialize <<<
+eval "$(\command bulker completions bash)"
+# <<< bulker initialize <<<
 "#;
 
-const SHELL_FUNCTION_ZSH: &str = r#"# >>> bulkers initialize >>>
-bulkers() {
+const SHELL_FUNCTION_ZSH: &str = r#"# >>> bulker initialize >>>
+bulker() {
   case "$1" in
     activate)
       shift
       _BULKER_OLD_PS1="$PS1"
-      eval "$(\command bulkers activate --echo "$@")"
+      eval "$(\command bulker activate --echo "$@")"
       if [ -n "$BULKERCRATE" ]; then
         PS1="(%F{226}${BULKERCRATE}%f) ${_BULKER_OLD_PS1}"
       fi
@@ -80,10 +80,10 @@ bulkers() {
       fi
       ;;
     *)
-      \command bulkers "$@"
+      \command bulker "$@"
       ;;
   esac
 }
-eval "$(\command bulkers completions zsh)"
-# <<< bulkers initialize <<<
+eval "$(\command bulker completions zsh)"
+# <<< bulker initialize <<<
 "#;

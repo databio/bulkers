@@ -9,9 +9,9 @@ pub fn create_cli() -> Command {
         .about("List cached crates")
         .after_help("\
 EXAMPLES:
-  bulkers crate list
-  bulkers crate list --versions                 # show all cached versions
-  bulkers crate list --simple                   # simple format for scripting")
+  bulker crate list
+  bulker crate list --versions                 # show all cached versions
+  bulker crate list --simple                   # simple format for scripting")
         .arg(
             clap::Arg::new("simple")
                 .long("simple")

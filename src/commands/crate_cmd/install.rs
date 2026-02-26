@@ -11,10 +11,10 @@ pub fn create_cli() -> Command {
         .about("Pre-cache a crate manifest (and optionally pull container images)")
         .after_help("\
 EXAMPLES:
-  bulkers crate install bulker/demo
-  bulkers crate install databio/pepatac:1.0.13
-  bulkers crate install -b bulker/demo             # also pull container images
-  bulkers crate install ./manifest.yaml            # cache from local file
+  bulker crate install bulker/demo
+  bulker crate install databio/pepatac:1.0.13
+  bulker crate install -b bulker/demo             # also pull container images
+  bulker crate install ./manifest.yaml            # cache from local file
 
 CRATEFILE FORMAT:
   namespace/crate:tag    Registry shorthand (e.g., databio/pepatac:1.0.13)

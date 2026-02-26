@@ -9,9 +9,9 @@ pub fn create_cli() -> Command {
         .about("Set a configuration value")
         .after_help("\
 EXAMPLES:
-  bulkers config set container_engine=apptainer
-  bulkers config set envvars=HOME,DISPLAY,LANG
-  bulkers config set shell_path=/bin/zsh
+  bulker config set container_engine=apptainer
+  bulker config set envvars=HOME,DISPLAY,LANG
+  bulker config set shell_path=/bin/zsh
 
 For list fields (envvars, volumes), use comma-separated values.")
         .arg(
@@ -23,7 +23,7 @@ For list fields (envvars, volumes), use comma-separated values.")
 
 pub fn run(matches: &ArgMatches) -> Result<()> {
     let (mut config, config_path) = load_config(matches.get_one::<String>("config").map(|s| s.as_str()))?;
-    let config_path = config_path.context("No config file to write to. Run `bulkers config init` first.")?;
+    let config_path = config_path.context("No config file to write to. Run `bulker config init` first.")?;
     let kv = matches.get_one::<String>("key_value").unwrap();
 
     let (key, value) = kv.split_once('=')

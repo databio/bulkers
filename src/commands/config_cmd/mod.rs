@@ -14,7 +14,7 @@ fn is_list_key(key: &str) -> bool {
 
 pub fn create_cli() -> Command {
     Command::new("config")
-        .about("Manage bulkers configuration")
+        .about("Manage bulker configuration")
         .subcommand_required(true)
         .arg_required_else_help(true)
         .arg(

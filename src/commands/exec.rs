@@ -13,9 +13,9 @@ pub fn create_cli() -> Command {
         .about("Run a command in a crate environment")
         .after_help("\
 EXAMPLES:
-  bulkers exec bulker/demo -- cowsay hello
-  bulkers exec databio/pepatac:1.0.13 -- samtools --version
-  bulkers exec -s bulker/demo -- cowsay hi    # strict: only crate commands in PATH
+  bulker exec bulker/demo -- cowsay hello
+  bulker exec databio/pepatac:1.0.13 -- samtools --version
+  bulker exec -s bulker/demo -- cowsay hi    # strict: only crate commands in PATH
 
 CRATE FORMAT:
   namespace/crate:tag    Full path (e.g., databio/pepatac:1.0.13)
