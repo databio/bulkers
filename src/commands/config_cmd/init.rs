@@ -61,8 +61,9 @@ pub fn run(matches: &ArgMatches) -> Result<()> {
     let mut config: BulkerConfig = serde_yaml::from_str(templates::DEFAULT_CONFIG)
         .context("Failed to parse default config template")?;
 
-    // Set engine-specific template names
+    // Set engine and resolve its absolute path
     config.bulker.container_engine = engine.clone();
+    config.bulker.engine_path = resolve_engine_path(&engine);
     match engine.as_str() {
         "apptainer" => {
             config.bulker.executable_template = "apptainer_executable.tera".to_string();
@@ -85,6 +86,9 @@ pub fn run(matches: &ArgMatches) -> Result<()> {
 
     log::info!("Initialized bulker config at: {}", config_path.display());
     log::info!("Container engine: {}", engine);
+    if let Some(ref ep) = config.bulker.engine_path {
+        log::info!("Engine path: {}", ep);
+    }
     log::info!("Templates written to: {}", templates_dir.display());
     println!("Bulker config initialized at: {}", config_path.display());
 
@@ -99,6 +103,17 @@ fn detect_engine() -> Result<String> {
     } else {
         bail!("No container engine found. Install docker or apptainer, or specify with --engine.");
     }
+}
+
+/// Resolve the absolute path of a command using `which`.
+/// Returns Some(path) if found, None otherwise.
+fn resolve_engine_path(engine: &str) -> Option<String> {
+    std::process::Command::new("which")
+        .arg(engine)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
 }
 
 fn is_in_path(cmd: &str) -> bool {

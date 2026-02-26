@@ -316,6 +316,7 @@ mod tests {
                 tool_args: None,
                 shell_prompt: None,
                 apptainer_image_folder: None,
+                engine_path: None,
             },
         }
     }

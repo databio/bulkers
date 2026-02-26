@@ -1,11 +1,11 @@
 #!/bin/sh
 
 if [ ! -f "{{ apptainer_fullpath }}" ]; then
-  apptainer pull {{ apptainer_image }} docker://{{ docker_image }}
+  {{ engine_path }} pull {{ apptainer_image }} docker://{{ docker_image }}
   mv {{ apptainer_image }} {{ apptainer_fullpath }}
 fi
 
-LC_ALL=C apptainer exec \
+LC_ALL=C {{ engine_path }} exec \
 {% if apptainer_args %}  {{ apptainer_args }} \
 {% endif %}{% for volume in volumes %}{% if volume != "$HOME" and volume != "${HOME}" %}  -B "{{ volume }}:{{ volume }}" \
 {% endif %}{% endfor %}  {{ apptainer_fullpath }}{% if apptainer_command %} {{ apptainer_command }}{% elif docker_command %} {{ docker_command }}{% elif command %} {{ command }}{% endif %} "$@"

@@ -1,6 +1,6 @@
 #!/bin/sh
 
 if [ ! -f "{{ apptainer_fullpath }}" ]; then
-  apptainer pull {{ apptainer_image }} docker://{{ docker_image }}
+  {{ engine_path }} pull {{ apptainer_image }} docker://{{ docker_image }}
   mv {{ apptainer_image }} {{ apptainer_fullpath }}
 fi

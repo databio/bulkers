@@ -40,6 +40,8 @@ pub struct BulkerSettings {
     pub shell_prompt: Option<String>,
     #[serde(default)]
     pub apptainer_image_folder: Option<String>,
+    #[serde(default)]
+    pub engine_path: Option<String>,
 }
 
 fn default_registry_url() -> String {
@@ -79,6 +81,9 @@ impl BulkerConfig {
         if let Some(ref folder) = config.bulker.apptainer_image_folder {
             config.bulker.apptainer_image_folder = Some(expand_path(folder));
         }
+        if let Some(ref ep) = config.bulker.engine_path {
+            config.bulker.engine_path = Some(expand_path(ep));
+        }
 
         Ok(config)
     }
@@ -89,6 +94,13 @@ impl BulkerConfig {
         std::fs::write(path, &yaml)
             .with_context(|| format!("Failed to write config: {}", path.display()))?;
         Ok(())
+    }
+
+    /// Get the resolved engine path. Returns the absolute path if set,
+    /// otherwise falls back to the engine name string (current behavior).
+    pub fn engine_path(&self) -> &str {
+        self.bulker.engine_path.as_deref()
+            .unwrap_or(&self.bulker.container_engine)
     }
 
     /// Look up host-tool-specific arguments from the config's tool_args.

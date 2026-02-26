@@ -132,6 +132,8 @@ pub fn shimlink_exec(command_name: &str, args: &[String]) -> Result<()> {
     // 8. Build and exec the container command
     let is_apptainer = config.bulker.container_engine == "apptainer";
 
+    let engine_path = config.engine_path();
+
     let cmd_vec = if is_apptainer {
         build_apptainer_command(
             &config,
@@ -140,6 +142,7 @@ pub fn shimlink_exec(command_name: &str, args: &[String]) -> Result<()> {
             &envvars,
             &resolved_args,
             interactive,
+            engine_path,
         )
     } else {
         build_docker_command(
@@ -150,6 +153,7 @@ pub fn shimlink_exec(command_name: &str, args: &[String]) -> Result<()> {
             &docker_args,
             &resolved_args,
             interactive,
+            engine_path,
         )
     };
 
@@ -201,8 +205,9 @@ pub fn build_docker_command(
     docker_args: &str,
     args: &[String],
     interactive: bool,
+    engine_path: &str,
 ) -> Vec<String> {
-    let mut cmd = vec!["docker".to_string(), "run".to_string(), "--rm".to_string(), "--init".to_string()];
+    let mut cmd = vec![engine_path.to_string(), "run".to_string(), "--rm".to_string(), "--init".to_string()];
 
     if interactive {
         cmd.push("-it".to_string());
@@ -295,6 +300,7 @@ pub fn build_apptainer_command(
     _envvars: &[String],
     args: &[String],
     interactive: bool,
+    engine_path: &str,
 ) -> Vec<String> {
     let (img_ns, img_name, _img_tag) = parse_docker_image_path(&pkg.docker_image);
     let apptainer_image = format!("{}-{}.sif", img_ns, img_name);
@@ -305,7 +311,7 @@ pub fn build_apptainer_command(
         .map(|f| format!("{}/{}", f, apptainer_image))
         .unwrap_or_else(|| apptainer_image.clone());
 
-    let mut cmd = vec!["apptainer".to_string(), "exec".to_string()];
+    let mut cmd = vec![engine_path.to_string(), "exec".to_string()];
 
     // Apptainer-specific args
     if let Some(ref aa) = pkg.apptainer_args {
@@ -689,7 +695,7 @@ mod tests {
         let envvars = vec!["DISPLAY".to_string()];
         let args = vec!["view".to_string(), "test.bam".to_string()];
 
-        let cmd = build_docker_command(&config, &pkg, &volumes, &envvars, "", &args, false);
+        let cmd = build_docker_command(&config, &pkg, &volumes, &envvars, "", &args, false, "docker");
 
         assert_eq!(cmd[0], "docker");
         assert_eq!(cmd[1], "run");
@@ -726,7 +732,7 @@ mod tests {
             no_default_volumes: false,
             workdir: None,
         };
-        let cmd = build_docker_command(&config, &pkg, &[], &[], "", &[], true);
+        let cmd = build_docker_command(&config, &pkg, &[], &[], "", &[], true, "docker");
         assert!(cmd.contains(&"-it".to_string()));
         assert!(cmd.contains(&"bash".to_string()));
     }
@@ -749,7 +755,7 @@ mod tests {
             no_default_volumes: false,
             workdir: None,
         };
-        let cmd = build_docker_command(&config, &pkg, &[], &[], "", &[], false);
+        let cmd = build_docker_command(&config, &pkg, &[], &[], "", &[], false, "docker");
         // Should NOT contain --user= or system volumes
         let cmd_str = cmd.join(" ");
         assert!(!cmd_str.contains("--user="));
@@ -775,7 +781,7 @@ mod tests {
             no_default_volumes: false,
             workdir: None,
         };
-        let cmd = build_docker_command(&config, &pkg, &[], &[], "", &[], false);
+        let cmd = build_docker_command(&config, &pkg, &[], &[], "", &[], false, "docker");
         assert!(!cmd.contains(&"--network=host".to_string()));
     }
 
@@ -798,7 +804,7 @@ mod tests {
             no_default_volumes: false,
             workdir: None,
         };
-        let cmd = build_docker_command(&config, &pkg, &[], &[], "", &[], false);
+        let cmd = build_docker_command(&config, &pkg, &[], &[], "", &[], false, "docker");
         let cmd_str = cmd.join(" ");
         assert!(!cmd_str.contains("/etc/passwd"));
     }
@@ -821,7 +827,7 @@ mod tests {
             no_default_volumes: false,
             workdir: None,
         };
-        let cmd = build_docker_command(&config, &pkg, &[], &[], "", &[], false);
+        let cmd = build_docker_command(&config, &pkg, &[], &[], "", &[], false, "docker");
         assert!(!cmd.contains(&"--network=host".to_string()));
     }
 
@@ -843,7 +849,7 @@ mod tests {
             no_default_volumes: false,
             workdir: None,
         };
-        let cmd = build_docker_command(&config, &pkg, &[], &[], "", &["--version".to_string()], false);
+        let cmd = build_docker_command(&config, &pkg, &[], &[], "", &["--version".to_string()], false, "docker");
         // Should use docker_command instead of command
         assert!(cmd.contains(&"python3".to_string()));
     }
@@ -868,7 +874,7 @@ mod tests {
             workdir: None,
         };
 
-        let cmd = build_apptainer_command(&config, &pkg, &[], &[], &[], false);
+        let cmd = build_apptainer_command(&config, &pkg, &[], &[], &[], false, "apptainer");
         assert_eq!(cmd[0], "apptainer");
         assert_eq!(cmd[1], "exec");
         // Should contain the SIF path
@@ -990,6 +996,64 @@ mod tests {
         assert_eq!(volumes_without_flag, vec!["$HOME".to_string()]);
     }
 
+    #[test]
+    fn test_engine_path_accessor_returns_absolute_when_set() {
+        let mut config = make_test_config();
+        config.bulker.engine_path = Some("/usr/bin/docker".to_string());
+        assert_eq!(config.engine_path(), "/usr/bin/docker");
+    }
+
+    #[test]
+    fn test_engine_path_accessor_falls_back_to_engine_name() {
+        let config = make_test_config();
+        assert_eq!(config.engine_path(), "docker");
+    }
+
+    #[test]
+    fn test_build_docker_command_uses_engine_path() {
+        let config = make_test_config();
+        let pkg = PackageCommand {
+            command: "samtools".to_string(),
+            docker_image: "quay.io/biocontainers/samtools:1.9".to_string(),
+            docker_command: None,
+            docker_args: None,
+            dockerargs: None,
+            apptainer_args: None,
+            apptainer_command: None,
+            volumes: vec![],
+            envvars: vec![],
+            no_user: false,
+            no_network: false,
+            no_default_volumes: false,
+            workdir: None,
+        };
+        let cmd = build_docker_command(&config, &pkg, &[], &[], "", &[], false, "/usr/bin/docker");
+        assert_eq!(cmd[0], "/usr/bin/docker");
+    }
+
+    #[test]
+    fn test_build_apptainer_command_uses_engine_path() {
+        let mut config = make_test_config();
+        config.bulker.apptainer_image_folder = Some("/tmp/sif".to_string());
+        let pkg = PackageCommand {
+            command: "samtools".to_string(),
+            docker_image: "quay.io/biocontainers/samtools:1.9".to_string(),
+            docker_command: None,
+            docker_args: None,
+            dockerargs: None,
+            apptainer_args: None,
+            apptainer_command: None,
+            volumes: vec![],
+            envvars: vec![],
+            no_user: false,
+            no_network: false,
+            no_default_volumes: false,
+            workdir: None,
+        };
+        let cmd = build_apptainer_command(&config, &pkg, &[], &[], &[], false, "/usr/local/bin/apptainer");
+        assert_eq!(cmd[0], "/usr/local/bin/apptainer");
+    }
+
     /// Helper to build a minimal BulkerConfig for tests.
     fn make_test_config() -> BulkerConfig {
         BulkerConfig {
@@ -1011,6 +1075,7 @@ mod tests {
                 tool_args: None,
                 shell_prompt: None,
                 apptainer_image_folder: None,
+                engine_path: None,
             },
         }
     }

@@ -1,6 +1,6 @@
 #!/bin/sh
 echo "Starting interactive docker shell for image '{{ docker_image }}' and command '{{ command }}'"
-docker run --rm --init -it \
+{{ engine_path }} run --rm --init -it \
 {% if dockerargs %}  {{ dockerargs }} \
 {% endif %}{% if docker_args %}  {{ docker_args }} \
 {% endif %}{% if not no_user %}  --user=$(id -u):$(id -g) \

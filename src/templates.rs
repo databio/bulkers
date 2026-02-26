@@ -86,6 +86,7 @@ fn build_context(
     }
     ctx.insert("envvars", &envvars);
 
+    ctx.insert("engine_path", config.engine_path());
     ctx.insert("docker_image", &pkg.docker_image);
     ctx.insert("command", &pkg.command);
     ctx.insert("no_user", &pkg.no_user);

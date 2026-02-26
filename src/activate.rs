@@ -39,14 +39,21 @@ pub fn get_new_path(config: &BulkerConfig, cratelist: &[CrateVars], strict: bool
         let _ = std::fs::remove_dir_all(&shimdir);
     }
 
+    let mut has_host_commands = false;
     for cv in &all_cratevars {
         let manifest = shimlink::load_cached_manifest(config, cv)?;
+        if !manifest.manifest.host_commands.is_empty() {
+            has_host_commands = true;
+        }
         shimlink::create_shimlink_dir(&manifest, &shimdir)?;
     }
 
     let shimdir_str = shimdir.to_string_lossy().to_string();
 
     if strict {
+        if !has_host_commands {
+            eprintln!("Note: Strict mode active with no host_commands. Only crate commands are on PATH.");
+        }
         Ok(shimdir_str)
     } else {
         let current_path = std::env::var("PATH").unwrap_or_default();

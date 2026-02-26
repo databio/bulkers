@@ -1,6 +1,6 @@
 #!/bin/sh
 
-LC_ALL=C apptainer shell \
+LC_ALL=C {{ engine_path }} shell \
 {% if apptainer_args %}  {{ apptainer_args }} \
 {% endif %}{% for volume in volumes %}{% if volume != "$HOME" and volume != "${HOME}" %}  -B "{{ volume }}:{{ volume }}" \
 {% endif %}{% endfor %}  {{ apptainer_fullpath }}
