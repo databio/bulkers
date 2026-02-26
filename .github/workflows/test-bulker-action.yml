@@ -4,7 +4,7 @@ jobs:
   test-registry-crate:
     runs-on: ubuntu-latest
     steps:
-      - uses: databio/bulker-action@dev
+      - uses: databio/bulker-action@master
         with:
           crate: bulker/demo
           command: cowsay "bulker works"
@@ -12,7 +12,7 @@ jobs:
   test-pipeline-tools:
     runs-on: ubuntu-latest
     steps:
-      - uses: databio/bulker-action@dev
+      - uses: databio/bulker-action@master
         with:
           crate: databio/pepatac:1.0.14
           command: samtools --version
