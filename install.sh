@@ -12,7 +12,7 @@ case "$OS" in
   Linux)
     case "$ARCH" in
       x86_64)  ASSET="bulker-Linux-musl-x86_64.tar.gz" ;;
-      aarch64) ASSET="bulker-Linux-musl-aarch64.tar.gz" ;;
+      aarch64) ASSET="bulker-Linux-musl-arm64.tar.gz" ;;
       *)       echo "Unsupported architecture: $ARCH"; exit 1 ;;
     esac
     ;;

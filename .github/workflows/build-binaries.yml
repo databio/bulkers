@@ -45,6 +45,6 @@ jobs:
       - name: Publish artifacts and release
         uses: houseabsolute/actions-rust-release@v0
         with:
-          executable-name: bulkers
+          executable-name: bulker
           target: ${{ matrix.platform.target }}
           changes-file: ""
