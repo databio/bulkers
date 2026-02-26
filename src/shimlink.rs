@@ -138,7 +138,8 @@ pub fn build_docker_command(
 
     // Docker args
     if !docker_args.is_empty() {
-        for part in shell_split(docker_args) {
+        let expanded_args = expand_path(docker_args);
+        for part in shell_split(&expanded_args) {
             cmd.push(part);
         }
     }
@@ -235,7 +236,8 @@ pub fn build_apptainer_command(
     // Apptainer-specific args
     if let Some(ref aa) = pkg.apptainer_args {
         if !aa.is_empty() {
-            for part in shell_split(aa) {
+            let expanded_args = expand_path(aa);
+            for part in shell_split(&expanded_args) {
                 cmd.push(part);
             }
         }
@@ -673,6 +675,23 @@ mod tests {
         let cmd = build_docker_command(&config, &pkg, &[], &[], "", &["--version".to_string()], false, "docker");
         // Should use docker_command instead of command
         assert!(cmd.contains(&"python3".to_string()));
+    }
+
+    #[test]
+    fn test_build_docker_command_expands_env_in_docker_args() {
+        let config = BulkerConfig::test_default();
+        let pkg = PackageCommand {
+            command: "R".to_string(),
+            docker_image: "r-base:4.3".to_string(),
+            ..Default::default()
+        };
+        let home = std::env::var("HOME").unwrap();
+        let docker_args = "--volume=${HOME}/R/4.0:/usr/local/lib/R/host-site-library";
+        let cmd = build_docker_command(&config, &pkg, &[], &[], docker_args, &[], false, "docker");
+        let cmd_str = cmd.join(" ");
+        // ${HOME} should be expanded, not passed literally
+        assert!(!cmd_str.contains("${HOME}"), "env var not expanded: {}", cmd_str);
+        assert!(cmd_str.contains(&format!("--volume={}/R/4.0:/usr/local/lib/R/host-site-library", home)));
     }
 
     #[test]

@@ -92,12 +92,33 @@ fn default_envvars() -> Vec<String> {
     vec!["DISPLAY".to_string()]
 }
 
+impl BulkerSettings {
+    /// Fix serde_yml's behavior of deserializing YAML null as the string "null".
+    fn sanitize(&mut self) {
+        if self.container_engine == "null" || self.container_engine.is_empty() {
+            self.container_engine = default_container_engine();
+        }
+        if self.engine_path.as_deref() == Some("null") || self.engine_path.as_deref() == Some("") {
+            self.engine_path = None;
+        }
+        if self.shell_prompt.as_deref() == Some("null") {
+            self.shell_prompt = None;
+        }
+        if self.apptainer_image_folder.as_deref() == Some("null") {
+            self.apptainer_image_folder = None;
+        }
+    }
+}
+
 impl BulkerConfig {
     pub fn from_file(path: &Path) -> Result<Self> {
         let contents = std::fs::read_to_string(path)
             .with_context(|| format!("Failed to read config: {}", path.display()))?;
         let mut config: BulkerConfig = serde_yml::from_str(&contents)
             .with_context(|| format!("Failed to parse config: {}", path.display()))?;
+
+        // Fix YAML null values deserialized as the string "null"
+        config.bulker.sanitize();
 
         // Expand env vars in key paths
         config.bulker.shell_path = expand_path(&config.bulker.shell_path);
@@ -489,5 +510,54 @@ mod tests {
         assert!(templates_dir.join("start.sh").exists());
         assert!(templates_dir.join("start_strict.sh").exists());
         assert!(templates_dir.join("docker_executable.tera").exists());
+    }
+
+    #[test]
+    fn test_null_container_engine_sanitized() {
+        let yaml = "bulker:\n  container_engine: null\n";
+        let tmpdir = tempfile::tempdir().unwrap();
+        let config_path = tmpdir.path().join("config.yaml");
+        std::fs::write(&config_path, yaml).unwrap();
+
+        let config = BulkerConfig::from_file(&config_path).unwrap();
+        assert_ne!(config.bulker.container_engine, "null");
+        assert!(!config.bulker.container_engine.is_empty());
+    }
+
+    #[test]
+    fn test_null_engine_path_sanitized() {
+        let yaml = "bulker:\n  engine_path: null\n";
+        let tmpdir = tempfile::tempdir().unwrap();
+        let config_path = tmpdir.path().join("config.yaml");
+        std::fs::write(&config_path, yaml).unwrap();
+
+        let config = BulkerConfig::from_file(&config_path).unwrap();
+        assert!(config.bulker.engine_path.is_none());
+    }
+
+    #[test]
+    fn test_both_null_engine_fields_sanitized() {
+        let yaml = "bulker:\n  container_engine: null\n  engine_path: null\n";
+        let tmpdir = tempfile::tempdir().unwrap();
+        let config_path = tmpdir.path().join("config.yaml");
+        std::fs::write(&config_path, yaml).unwrap();
+
+        let config = BulkerConfig::from_file(&config_path).unwrap();
+        assert_ne!(config.bulker.container_engine, "null");
+        assert!(config.bulker.engine_path.is_none());
+        // engine_path() should return the sanitized container_engine, not "null"
+        assert_ne!(config.engine_path(), "null");
+    }
+
+    #[test]
+    fn test_normal_config_unchanged_by_sanitize() {
+        let yaml = "bulker:\n  container_engine: docker\n  engine_path: /usr/bin/docker\n";
+        let tmpdir = tempfile::tempdir().unwrap();
+        let config_path = tmpdir.path().join("config.yaml");
+        std::fs::write(&config_path, yaml).unwrap();
+
+        let config = BulkerConfig::from_file(&config_path).unwrap();
+        assert_eq!(config.bulker.container_engine, "docker");
+        assert_eq!(config.bulker.engine_path.as_deref(), Some("/usr/bin/docker"));
     }
 }

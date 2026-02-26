@@ -4,37 +4,50 @@ set -euo pipefail
 REPO="databio/bulkers"
 INSTALL_DIR="$HOME/.local/bin"
 
-# Detect OS and architecture
-OS="$(uname -s)"
-ARCH="$(uname -m)"
+# Determine script's directory (empty if piped from curl)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}" 2>/dev/null)" 2>/dev/null && pwd || echo "")"
 
-case "$OS" in
-  Linux)
-    case "$ARCH" in
-      x86_64)  ASSET="bulker-Linux-musl-x86_64.tar.gz" ;;
-      aarch64) ASSET="bulker-Linux-musl-arm64.tar.gz" ;;
-      *)       echo "Unsupported architecture: $ARCH"; exit 1 ;;
-    esac
-    ;;
-  Darwin)
-    case "$ARCH" in
-      x86_64)  ASSET="bulker-macOS-x86_64.tar.gz" ;;
-      arm64)   ASSET="bulker-macOS-arm64.tar.gz" ;;
-      *)       echo "Unsupported architecture: $ARCH"; exit 1 ;;
-    esac
-    ;;
-  *)
-    echo "Unsupported OS: $OS"
-    exit 1
-    ;;
-esac
-
-# Install binary
 mkdir -p "$INSTALL_DIR"
-echo "Downloading $ASSET..."
-curl -sL "https://github.com/$REPO/releases/latest/download/$ASSET" | tar xz -C "$INSTALL_DIR"
-chmod +x "$INSTALL_DIR/bulker"
-echo "Installed bulker to $INSTALL_DIR/bulker"
+
+if [ -n "$SCRIPT_DIR" ] && grep -q '^name = "bulker"' "$SCRIPT_DIR/Cargo.toml" 2>/dev/null; then
+  # Local mode: build from source
+  echo "Building from source..."
+  cargo build --release --manifest-path "$SCRIPT_DIR/Cargo.toml"
+  cp "$SCRIPT_DIR/target/release/bulker" "$INSTALL_DIR/bulker"
+  chmod +x "$INSTALL_DIR/bulker"
+else
+  # Remote mode: download from GitHub releases
+  OS="$(uname -s)"
+  ARCH="$(uname -m)"
+
+  case "$OS" in
+    Linux)
+      case "$ARCH" in
+        x86_64)  ASSET="bulker-Linux-musl-x86_64.tar.gz" ;;
+        aarch64) ASSET="bulker-Linux-musl-arm64.tar.gz" ;;
+        *)       echo "Unsupported architecture: $ARCH"; exit 1 ;;
+      esac
+      ;;
+    Darwin)
+      case "$ARCH" in
+        x86_64)  ASSET="bulker-macOS-x86_64.tar.gz" ;;
+        arm64)   ASSET="bulker-macOS-arm64.tar.gz" ;;
+        *)       echo "Unsupported architecture: $ARCH"; exit 1 ;;
+      esac
+      ;;
+    *)
+      echo "Unsupported OS: $OS"
+      exit 1
+      ;;
+  esac
+
+  echo "Downloading $ASSET..."
+  curl -sL "https://github.com/$REPO/releases/latest/download/$ASSET" | tar xz -C "$INSTALL_DIR"
+  chmod +x "$INSTALL_DIR/bulker"
+fi
+
+VERSION="$("$INSTALL_DIR/bulker" --version 2>/dev/null || echo "bulker (unknown version)")"
+echo "Installed $VERSION to $INSTALL_DIR/bulker"
 
 # Detect shell rc file
 SHELL_NAME="$(basename "$SHELL")"
