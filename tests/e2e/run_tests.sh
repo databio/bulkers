@@ -21,26 +21,24 @@ FAILURES=""
 
 setup() {
     TMPDIR="$(mktemp -d)"
+    export XDG_CONFIG_HOME="$TMPDIR/xdg"
     CONFIG="$TMPDIR/bulker_config.yaml"
 
-    # Init
-    "$BULKERS" init -c "$CONFIG" >/dev/null 2>&1
+    "$BULKERS" config init -c "$CONFIG" >/dev/null 2>&1
 
-    # Patch default_crate_folder to be inside our tmpdir
-    sed -i "s|default_crate_folder:.*|default_crate_folder: $TMPDIR/crates|" "$CONFIG"
-
-    # Load the test crate (with --build to pull images)
-    "$BULKERS" load -c "$CONFIG" -m "$MANIFEST" -b test/demo:1.0 >/dev/null 2>&1
+    # Install the test crate with --build to pull images
+    "$BULKERS" crate install -c "$CONFIG" -b "$MANIFEST" >/dev/null 2>&1
 }
 
 setup_no_load() {
     TMPDIR="$(mktemp -d)"
+    export XDG_CONFIG_HOME="$TMPDIR/xdg"
     CONFIG="$TMPDIR/bulker_config.yaml"
-    "$BULKERS" init -c "$CONFIG" >/dev/null 2>&1
-    sed -i "s|default_crate_folder:.*|default_crate_folder: $TMPDIR/crates|" "$CONFIG"
+    "$BULKERS" config init -c "$CONFIG" >/dev/null 2>&1
 }
 
 teardown() {
+    unset XDG_CONFIG_HOME 2>/dev/null || true
     if [ -n "${TMPDIR:-}" ] && [ -d "$TMPDIR" ]; then
         rm -rf "$TMPDIR"
     fi
@@ -66,7 +64,7 @@ test_init() {
     TMPDIR="$(mktemp -d)"
     CONFIG="$TMPDIR/bulker_config.yaml"
 
-    "$BULKERS" init -c "$CONFIG"
+    "$BULKERS" config init -c "$CONFIG"
 
     # Config exists and contains expected content
     [ -f "$CONFIG" ]
@@ -77,7 +75,7 @@ test_init() {
 test_load_and_build() {
     setup_no_load
 
-    "$BULKERS" load -c "$CONFIG" -m "$MANIFEST" -b test/demo:1.0
+    "$BULKERS" crate install -c "$CONFIG" -b "$MANIFEST"
 
     # Image should have been pulled
     docker image inspect nsheff/cowsay >/dev/null 2>&1
@@ -86,7 +84,7 @@ test_load_and_build() {
 test_run_cowsay() {
     setup
 
-    output=$("$BULKERS" run -c "$CONFIG" test/demo:1.0 cowsay "hello from bulkers" 2>&1)
+    output=$("$BULKERS" exec -c "$CONFIG" local/test_manifest:default -- cowsay "hello from bulkers" 2>&1)
 
     echo "$output" | grep -q "hello from bulkers"
 }
@@ -96,7 +94,7 @@ test_run_exit_code() {
 
     # Run a command that doesn't exist - should return non-zero
     set +e
-    "$BULKERS" run -c "$CONFIG" test/demo:1.0 nonexistent_command 2>/dev/null
+    "$BULKERS" exec -c "$CONFIG" local/test_manifest:default -- nonexistent_command 2>/dev/null
     rc=$?
     set -e
 
@@ -106,7 +104,7 @@ test_run_exit_code() {
 test_activate_echo_and_source() {
     setup
 
-    activate_output=$("$BULKERS" activate -c "$CONFIG" --echo test/demo:1.0 2>&1)
+    activate_output=$("$BULKERS" activate -c "$CONFIG" --echo local/test_manifest:default 2>&1)
 
     # Should contain export statements
     echo "$activate_output" | grep -q "export PATH="
@@ -122,18 +120,18 @@ test_run_strict_mode() {
 
     # Strict mode sets PATH to only the crate directory.
     # Verify via activate --echo that PATH contains only the crate path.
-    output=$("$BULKERS" activate -c "$CONFIG" --echo test/demo:1.0 2>&1)
+    output=$("$BULKERS" activate -c "$CONFIG" --echo local/test_manifest:default 2>&1)
     # The non-strict PATH should contain the crate folder AND existing PATH
     echo "$output" | grep -q "export PATH="
 
-    # Now test non-strict run works (baseline)
-    output=$("$BULKERS" run -c "$CONFIG" test/demo:1.0 cowsay "strict test" 2>&1)
+    # Now test non-strict exec works (baseline)
+    output=$("$BULKERS" exec -c "$CONFIG" local/test_manifest:default -- cowsay "strict test" 2>&1)
     echo "$output" | grep -q "strict test"
 
     # Verify strict flag is accepted and runs (it may fail because docker isn't
     # on the strict PATH, but the binary should not error on the flag itself)
     set +e
-    "$BULKERS" run -c "$CONFIG" -s test/demo:1.0 cowsay "strict test" 2>/dev/null
+    "$BULKERS" exec -c "$CONFIG" -s local/test_manifest:default -- cowsay "strict test" 2>/dev/null
     rc=$?
     set -e
     # rc may be non-zero due to docker not being on strict PATH - that's expected
@@ -144,24 +142,24 @@ test_run_strict_mode() {
 test_lifecycle() {
     setup_no_load
 
-    # Load
-    "$BULKERS" load -c "$CONFIG" -m "$MANIFEST" test/demo:1.0
+    # Install (local manifest gets cached as local/test_manifest:default)
+    "$BULKERS" crate install -c "$CONFIG" "$MANIFEST"
 
     # List shows the crate
-    list_output=$("$BULKERS" list -c "$CONFIG" 2>&1)
-    echo "$list_output" | grep -q "test/demo:1.0"
+    list_output=$("$BULKERS" crate list -c "$CONFIG" 2>&1)
+    echo "$list_output" | grep -q "test_manifest"
 
     # Inspect shows commands
-    inspect_output=$("$BULKERS" inspect -c "$CONFIG" test/demo:1.0 2>&1)
+    inspect_output=$("$BULKERS" crate inspect -c "$CONFIG" local/test_manifest:default 2>&1)
     echo "$inspect_output" | grep -q "cowsay"
     echo "$inspect_output" | grep -q "fortune"
 
-    # Unload
-    "$BULKERS" unload -c "$CONFIG" test/demo:1.0
+    # Clean
+    "$BULKERS" crate clean -c "$CONFIG" local/test_manifest:default
 
     # List no longer shows it
-    list_output=$("$BULKERS" list -c "$CONFIG" 2>&1)
-    if echo "$list_output" | grep -q "test/demo:1.0"; then
+    list_output=$("$BULKERS" crate list -c "$CONFIG" 2>&1)
+    if echo "$list_output" | grep -q "local/test_manifest:default"; then
         return 1
     fi
 }
@@ -169,17 +167,12 @@ test_lifecycle() {
 test_envvars_passthrough() {
     setup
 
-    # Add envvar to config
-    "$BULKERS" envvars -c "$CONFIG" -a MY_TEST_VAR
+    # Add envvar via config set (comma-separated list)
+    "$BULKERS" config set -c "$CONFIG" "envvars=DISPLAY,MY_TEST_VAR"
 
-    # Set the envvar and run a command that echoes it
-    export MY_TEST_VAR=hello_from_test
-    output=$("$BULKERS" run -c "$CONFIG" test/demo:1.0 fortune 2>&1)
-
-    # fortune just prints a quote - we can't check the envvar this way since
-    # the container doesn't echo it. Instead, verify the envvar was added to config.
-    grep -q "MY_TEST_VAR" "$CONFIG"
-    unset MY_TEST_VAR
+    # Verify it was added
+    get_output=$("$BULKERS" config get -c "$CONFIG" envvars 2>&1)
+    echo "$get_output" | grep -q "MY_TEST_VAR"
 }
 
 # ---------- main ----------
