@@ -47,6 +47,19 @@ source ~/.bashrc  # or: source ~/.zshrc
 This builds the binary, copies it to `~/.local/bin/`, and adds the shell function to your shell rc file.
 
 
+## Uninstall
+
+```bash
+# Remove binary
+rm ~/.local/bin/bulker
+
+# Remove config and cached manifests
+rm -rf ~/.config/bulker
+
+# Remove the shell function from your rc file
+# Delete the `eval "$(bulker init-shell ...)"` line from ~/.bashrc or ~/.zshrc
+```
+
 ## Usage
 
 Bulker organizes commands into three groups:
