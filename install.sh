@@ -13,7 +13,16 @@ if [ -n "$SCRIPT_DIR" ] && grep -q '^name = "bulker"' "$SCRIPT_DIR/Cargo.toml" 2
   # Local mode: build from source
   echo "Building from source..."
   cargo build --release --manifest-path "$SCRIPT_DIR/Cargo.toml"
-  cp "$SCRIPT_DIR/target/release/bulker" "$INSTALL_DIR/bulker"
+  if ! cp "$SCRIPT_DIR/target/release/bulker" "$INSTALL_DIR/bulker" 2>/dev/null; then
+    if [ "${1:-}" = "--force" ]; then
+      rm -f "$INSTALL_DIR/bulker"
+      cp "$SCRIPT_DIR/target/release/bulker" "$INSTALL_DIR/bulker"
+    else
+      echo "Error: bulker binary is in use (a container may be running)."
+      echo "Stop running containers, or re-run with: ./install.sh --force"
+      exit 1
+    fi
+  fi
   chmod +x "$INSTALL_DIR/bulker"
 else
   # Remote mode: download from GitHub releases
