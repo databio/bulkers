@@ -106,7 +106,7 @@ fn build_prompt(shell: &str, crate_name: &str, custom_prompt: Option<&str>) -> S
 /// Activate a crate environment by replacing the current process with a new shell.
 pub fn activate(
     config: &BulkerConfig,
-    config_path: &Path,
+    config_path: Option<&Path>,
     cratelist: &[CrateVars],
     echo: bool,
     strict: bool,
@@ -151,8 +151,10 @@ pub fn activate(
     // Build prompt
     let ps1 = build_prompt(shell, &crate_name, config.bulker.shell_prompt.as_deref());
 
-    // Resolve rcfile paths from config directory
-    let config_dir = config_templates_dir(config_path);
+    // Resolve rcfile paths from config directory (or default config path)
+    let default_cfg = crate::config::default_config_path();
+    let effective_config_path = config_path.unwrap_or(&default_cfg);
+    let config_dir = config_templates_dir(effective_config_path);
     let rcfile = if strict {
         &config.bulker.rcfile_strict
     } else {
@@ -166,6 +168,9 @@ pub fn activate(
             println!("export BULKER_ORIG_PATH=\"$PATH\"");
         }
         println!("export BULKERCRATE=\"{}\"", crate_id);
+        if let Some(cp) = config_path {
+            println!("export BULKERCFG=\"{}\"", cp.display());
+        }
         println!("export BULKERPATH=\"{}\"", newpath);
         if prompt {
             println!("export BULKERPROMPT=\"{}\"", ps1);
@@ -179,6 +184,9 @@ pub fn activate(
     // SAFETY: called in the main thread before exec replaces the process
     unsafe {
         std::env::set_var("BULKERCRATE", &crate_id);
+        if let Some(cp) = config_path {
+            std::env::set_var("BULKERCFG", cp.to_string_lossy().as_ref());
+        }
         std::env::set_var("BULKERPATH", &newpath);
         if prompt {
             std::env::set_var("BULKERPROMPT", &ps1);

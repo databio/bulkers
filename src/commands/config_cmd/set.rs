@@ -1,7 +1,8 @@
 use anyhow::{Result, bail};
 use clap::{Arg, ArgMatches, Command};
 
-use crate::config::{BulkerConfig, select_config};
+use anyhow::Context;
+use crate::config::load_config;
 
 pub fn create_cli() -> Command {
     Command::new("set")
@@ -21,8 +22,8 @@ For list fields (envvars, volumes), use comma-separated values.")
 }
 
 pub fn run(matches: &ArgMatches) -> Result<()> {
-    let config_path = select_config(matches.get_one::<String>("config").map(|s| s.as_str()))?;
-    let mut config = BulkerConfig::from_file(&config_path)?;
+    let (mut config, config_path) = load_config(matches.get_one::<String>("config").map(|s| s.as_str()))?;
+    let config_path = config_path.context("No config file to write to. Run `bulkers config init` first.")?;
     let kv = matches.get_one::<String>("key_value").unwrap();
 
     let (key, value) = kv.split_once('=')

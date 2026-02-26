@@ -1,7 +1,7 @@
 use anyhow::{Result, bail};
 use clap::{Arg, ArgAction, ArgMatches, Command};
 
-use crate::config::{BulkerConfig, select_config};
+use crate::config::load_config;
 use crate::manifest::parse_registry_paths;
 use crate::manifest_cache;
 
@@ -34,8 +34,7 @@ pub fn run(matches: &ArgMatches) -> Result<()> {
             println!("Manifest cache is already empty.");
         }
     } else if let Some(registry_paths) = matches.get_one::<String>("crate_registry_paths") {
-        let config_path = select_config(matches.get_one::<String>("config").map(|s| s.as_str()))?;
-        let config = BulkerConfig::from_file(&config_path)?;
+        let (config, _config_path) = load_config(matches.get_one::<String>("config").map(|s| s.as_str()))?;
         let cratelist = parse_registry_paths(registry_paths, &config.bulker.default_namespace);
         for cv in &cratelist {
             manifest_cache::remove_cached(cv)?;

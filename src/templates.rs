@@ -21,12 +21,6 @@ pub const BASH_RC: &str = include_str!("../templates/start.sh");
 pub const BASH_RC_STRICT: &str = include_str!("../templates/start_strict.sh");
 pub const ZSH_RC: &str = include_str!("../templates/zsh_start/.zshrc");
 pub const ZSH_RC_STRICT: &str = include_str!("../templates/zsh_start_strict/.zshrc");
-#[cfg(target_os = "macos")]
-pub const DEFAULT_CONFIG: &str = include_str!("../templates/bulker_config_macos.yaml");
-
-#[cfg(not(target_os = "macos"))]
-pub const DEFAULT_CONFIG: &str = include_str!("../templates/bulker_config_linux.yaml");
-
 /// Write all embedded templates to a directory on disk (for rcfile references).
 pub fn write_templates_to_dir(dir: &Path) -> Result<()> {
     std::fs::create_dir_all(dir)

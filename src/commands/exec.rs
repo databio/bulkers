@@ -4,7 +4,7 @@ use std::os::unix::process::CommandExt;
 use std::sync::atomic::Ordering;
 
 use crate::activate::get_new_path;
-use crate::config::{BulkerConfig, select_config};
+use crate::config::load_config;
 use crate::manifest::parse_registry_paths;
 use crate::process;
 
@@ -56,8 +56,7 @@ CRATE FORMAT:
 }
 
 pub fn run(matches: &ArgMatches) -> Result<()> {
-    let config_path = select_config(matches.get_one::<String>("config").map(|s| s.as_str()))?;
-    let config = BulkerConfig::from_file(&config_path)?;
+    let (config, config_path) = load_config(matches.get_one::<String>("config").map(|s| s.as_str()))?;
 
     let registry_paths = matches.get_one::<String>("crate_registry_paths").unwrap();
     let cratelist = parse_registry_paths(registry_paths, &config.bulker.default_namespace);
@@ -82,10 +81,15 @@ pub fn run(matches: &ArgMatches) -> Result<()> {
         .map(|cv| cv.display_name())
         .unwrap_or_default();
 
+    let bulkercfg_export = match &config_path {
+        Some(p) => format!("export BULKERCFG=\"{}\"; ", p.display()),
+        None => String::new(),
+    };
     let merged_command = format!(
-        "export PATH=\"{}\"; export BULKERCRATE=\"{}\"; {}",
+        "export PATH=\"{}\"; export BULKERCRATE=\"{}\"; {}{}",
         newpath,
         crate_id,
+        bulkercfg_export,
         quoted_args.join(" ")
     );
 

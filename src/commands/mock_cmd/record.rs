@@ -4,7 +4,7 @@ use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 
-use crate::config::{BulkerConfig, select_config};
+use crate::config::load_config;
 use crate::manifest::{load_remote_manifest, parse_registry_paths};
 use crate::mock;
 use crate::process;
@@ -41,8 +41,7 @@ The recordings are appended to the specified outputs.json file for later use wit
 }
 
 pub fn run(matches: &ArgMatches) -> Result<()> {
-    let config_path = select_config(matches.get_one::<String>("config").map(|s| s.as_str()))?;
-    let config = BulkerConfig::from_file(&config_path)?;
+    let (config, _config_path) = load_config(matches.get_one::<String>("config").map(|s| s.as_str()))?;
 
     let registry_paths = matches.get_one::<String>("crate_registry_paths").unwrap();
     let cratelist = parse_registry_paths(registry_paths, &config.bulker.default_namespace);

@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use clap::{Arg, ArgAction, ArgMatches, Command};
 use std::path::PathBuf;
 
-use crate::config::{BulkerConfig, select_config};
+use crate::config::load_config;
 use crate::manifest::{load_remote_manifest, parse_registry_paths};
 use crate::mock;
 
@@ -43,8 +43,7 @@ file instead of real containers. Use 'bulkers mock record' to create the outputs
 }
 
 pub fn run(matches: &ArgMatches) -> Result<()> {
-    let config_path = select_config(matches.get_one::<String>("config").map(|s| s.as_str()))?;
-    let config = BulkerConfig::from_file(&config_path)?;
+    let (config, _config_path) = load_config(matches.get_one::<String>("config").map(|s| s.as_str()))?;
 
     let registry_paths = matches.get_one::<String>("crate_registry_paths").unwrap();
     let cratelist = parse_registry_paths(registry_paths, &config.bulker.default_namespace);

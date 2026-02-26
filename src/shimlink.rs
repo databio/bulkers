@@ -8,7 +8,7 @@ use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::sync::atomic::Ordering;
 
-use crate::config::{BulkerConfig, expand_path, select_config};
+use crate::config::{BulkerConfig, expand_path, load_config};
 use crate::manifest::{CrateVars, Manifest, PackageCommand, parse_docker_image_path, parse_registry_path};
 use crate::process;
 
@@ -42,8 +42,7 @@ pub fn shimlink_exec(command_name: &str, args: &[String]) -> Result<()> {
     // 1. Read environment
     let crate_id = std::env::var("BULKERCRATE")
         .context("$BULKERCRATE not set. Are you in an activated bulker environment?")?;
-    let config_path = select_config(None)?;
-    let config = BulkerConfig::from_file(&config_path)?;
+    let (config, _config_path) = load_config(None)?;
 
     // 2. Find command in crate manifest or its imports
     let cratevars = parse_registry_path(&crate_id, &config.bulker.default_namespace);

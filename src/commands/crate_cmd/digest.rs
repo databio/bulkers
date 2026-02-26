@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::{Arg, ArgAction, ArgMatches, Command};
 
-use crate::config::{BulkerConfig, select_config};
+use crate::config::load_config;
 use crate::digest;
 use crate::manifest::parse_registry_path;
 use crate::manifest_cache;
@@ -34,8 +34,7 @@ EXAMPLES:
 }
 
 pub fn run(matches: &ArgMatches) -> Result<()> {
-    let config_path = select_config(matches.get_one::<String>("config").map(|s| s.as_str()))?;
-    let config = BulkerConfig::from_file(&config_path)?;
+    let (config, _config_path) = load_config(matches.get_one::<String>("config").map(|s| s.as_str()))?;
 
     let registry_path = matches.get_one::<String>("crate_registry_path").unwrap();
     let verbose = matches.get_flag("verbose");

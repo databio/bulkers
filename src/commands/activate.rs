@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::{Arg, ArgAction, ArgMatches, Command};
 
-use crate::config::{BulkerConfig, select_config};
+use crate::config::load_config;
 use crate::manifest::{parse_registry_paths, CrateVars};
 
 /// Detect if a crate argument is a local file path (as opposed to a registry path).
@@ -93,8 +93,7 @@ CRATE FORMAT:
 }
 
 pub fn run(matches: &ArgMatches) -> Result<()> {
-    let config_path = select_config(matches.get_one::<String>("config").map(|s| s.as_str()))?;
-    let config = BulkerConfig::from_file(&config_path)?;
+    let (config, config_path) = load_config(matches.get_one::<String>("config").map(|s| s.as_str()))?;
 
     let registry_paths = matches.get_one::<String>("crate_registry_paths").unwrap();
     let echo = matches.get_flag("echo");
@@ -109,5 +108,5 @@ pub fn run(matches: &ArgMatches) -> Result<()> {
         parse_registry_paths(registry_paths, &config.bulker.default_namespace)
     };
 
-    crate::activate::activate(&config, &config_path, &cratelist, echo, strict, !hide_prompt, force)
+    crate::activate::activate(&config, config_path.as_deref(), &cratelist, echo, strict, !hide_prompt, force)
 }

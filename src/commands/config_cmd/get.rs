@@ -1,7 +1,7 @@
 use anyhow::{Result, bail};
 use clap::{Arg, ArgMatches, Command};
 
-use crate::config::{BulkerConfig, select_config};
+use crate::config::load_config;
 
 pub fn create_cli() -> Command {
     Command::new("get")
@@ -23,8 +23,7 @@ SUPPORTED KEYS:
 }
 
 pub fn run(matches: &ArgMatches) -> Result<()> {
-    let config_path = select_config(matches.get_one::<String>("config").map(|s| s.as_str()))?;
-    let config = BulkerConfig::from_file(&config_path)?;
+    let (config, _config_path) = load_config(matches.get_one::<String>("config").map(|s| s.as_str()))?;
     let key = matches.get_one::<String>("key").unwrap();
 
     match key.as_str() {
