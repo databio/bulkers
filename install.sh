@@ -5,7 +5,10 @@ REPO="databio/bulkers"
 INSTALL_DIR="$HOME/.local/bin"
 
 # Determine script's directory (empty if piped from curl)
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}" 2>/dev/null)" 2>/dev/null && pwd || echo "")"
+SCRIPT_DIR=""
+if [ ${#BASH_SOURCE[@]} -gt 0 ]; then
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || echo "")"
+fi
 
 mkdir -p "$INSTALL_DIR"
 
