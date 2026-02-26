@@ -10,6 +10,3 @@ bulker:
   rcfile_strict: start_strict.sh
   container_engine: docker
   default_namespace: bulker
-  executable_template: docker_executable.tera
-  shell_template: docker_shell.tera
-  build_template: docker_build.tera
