@@ -56,3 +56,36 @@ pub fn setup_signal_forwarding() {
         }
     });
 }
+
+/// Spawn a child process in a new session with signal forwarding and wait for it.
+/// Returns the child's exit code (or 1 if unavailable).
+pub fn spawn_and_wait(program: &str, args: &[impl AsRef<std::ffi::OsStr>]) -> anyhow::Result<i32> {
+    use anyhow::Context;
+    use std::os::unix::process::CommandExt;
+
+    setup_signal_forwarding();
+
+    let child = unsafe {
+        std::process::Command::new(program)
+            .args(args)
+            .pre_exec(|| {
+                nix::unistd::setsid()
+                    .map_err(|e| std::io::Error::from_raw_os_error(e as i32))?;
+                Ok(())
+            })
+            .spawn()
+            .with_context(|| format!("Failed to spawn: {}", program))?
+    };
+
+    let child_pid = child.id() as i32;
+    CHILD_PID.store(child_pid, Ordering::SeqCst);
+
+    let mut child = child;
+    let status = child.wait().context("Failed to wait on child process")?;
+    Ok(status.code().unwrap_or(1))
+}
+
+/// Like `spawn_and_wait` but runs via `/bin/sh -c`.
+pub fn spawn_shell_and_wait(shell_command: &str) -> anyhow::Result<i32> {
+    spawn_and_wait("/bin/sh", &["-c", shell_command])
+}

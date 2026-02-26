@@ -38,8 +38,8 @@ pub fn run(matches: &ArgMatches) -> Result<()> {
     let path_a = matches.get_one::<String>("crate_a").unwrap();
     let path_b = matches.get_one::<String>("crate_b").unwrap();
 
-    let cv_a = parse_registry_path(path_a, &config.bulker.default_namespace);
-    let cv_b = parse_registry_path(path_b, &config.bulker.default_namespace);
+    let cv_a = parse_registry_path(path_a, &config.bulker.default_namespace)?;
+    let cv_b = parse_registry_path(path_b, &config.bulker.default_namespace)?;
 
     let manifest_a = manifest_cache::load_cached(&cv_a)?
         .ok_or_else(|| anyhow::anyhow!(

@@ -4,12 +4,10 @@
 //! and exec it. No generated shell scripts needed.
 
 use anyhow::{Context, Result, bail};
-use std::os::unix::process::CommandExt;
 use std::path::Path;
-use std::sync::atomic::Ordering;
 
 use crate::config::{BulkerConfig, expand_path, load_config};
-use crate::manifest::{CrateVars, Manifest, PackageCommand, parse_docker_image_path, parse_registry_path};
+use crate::manifest::{CrateVars, Manifest, PackageCommand, parse_registry_path};
 use crate::process;
 
 // ─── argv[0] detection ───────────────────────────────────────────────────────
@@ -45,76 +43,36 @@ pub fn shimlink_exec(command_name: &str, args: &[String]) -> Result<()> {
     let (config, _config_path) = load_config(None)?;
 
     // 2. Find command in crate manifest or its imports
-    let cratevars = parse_registry_path(&crate_id, &config.bulker.default_namespace);
+    let cratevars = parse_registry_path(&crate_id, &config.bulker.default_namespace)?;
     let pkg = find_command_in_crate_with_imports(&config, &cratevars, actual_command)?;
 
-    // 4. Resolve argument paths and auto-mount directories
+    // 3. Resolve argument paths and auto-mount directories
     let (resolved_args, auto_mount_dirs) = resolve_arg_paths(args);
 
-    // 5. Merge volumes: config + command + auto-mount
+    // 4. Merge volumes: config + command + auto-mount
     let mut volumes = if pkg.no_default_volumes {
         Vec::new()
     } else {
         config.bulker.volumes.clone()
     };
-    for v in &pkg.volumes {
-        if !volumes.contains(v) {
-            volumes.push(v.clone());
-        }
-    }
-    for d in &auto_mount_dirs {
-        if !volumes.contains(d) {
-            volumes.push(d.clone());
-        }
-    }
+    crate::manifest::merge_lists(&mut volumes, &pkg.volumes);
+    crate::manifest::merge_lists(&mut volumes, &auto_mount_dirs);
 
-    // 6. Merge envvars: config + command
+    // 5. Merge envvars: config + command
     let mut envvars = config.bulker.envvars.clone();
-    for e in &pkg.envvars {
-        if !envvars.contains(e) {
-            envvars.push(e.clone());
-        }
-    }
+    crate::manifest::merge_lists(&mut envvars, &pkg.envvars);
     // Add BULKER_EXTRA_ENVVARS from environment
     if let Ok(extra) = std::env::var("BULKER_EXTRA_ENVVARS") {
-        for e in extra.split(',') {
-            let e = e.trim().to_string();
-            if !e.is_empty() && !envvars.contains(&e) {
-                envvars.push(e);
-            }
-        }
+        let extras: Vec<String> = extra.split(',').map(|e| e.trim().to_string()).filter(|e| !e.is_empty()).collect();
+        crate::manifest::merge_lists(&mut envvars, &extras);
     }
 
-    // 7. Merge docker_args from multiple sources
-    let mut docker_args = String::new();
-    if let Some(ref da) = pkg.dockerargs {
-        docker_args.push_str(da);
-    }
-    if let Some(ref da) = pkg.docker_args {
-        if !docker_args.is_empty() {
-            docker_args.push(' ');
-        }
-        docker_args.push_str(da);
-    }
-    // Host-tool-specific args from config
+    // 6. Merge docker_args from multiple sources
     let tool_extra = config.host_tool_specific_args(&pkg, "docker_args");
-    if !tool_extra.is_empty() {
-        if !docker_args.is_empty() {
-            docker_args.push(' ');
-        }
-        docker_args.push_str(&tool_extra);
-    }
-    // BULKER_EXTRA_DOCKER_ARGS from environment
-    if let Ok(extra) = std::env::var("BULKER_EXTRA_DOCKER_ARGS") {
-        if !extra.is_empty() {
-            if !docker_args.is_empty() {
-                docker_args.push(' ');
-            }
-            docker_args.push_str(&extra);
-        }
-    }
+    let env_extra = std::env::var("BULKER_EXTRA_DOCKER_ARGS").unwrap_or_default();
+    let docker_args = pkg.merged_docker_args(&[&tool_extra, &env_extra]);
 
-    // 8. Build and exec the container command
+    // 7. Build and exec the container command
     let is_apptainer = config.bulker.container_engine == "apptainer";
 
     let engine_path = config.engine_path();
@@ -154,29 +112,9 @@ pub fn shimlink_exec(command_name: &str, args: &[String]) -> Result<()> {
 
     log::debug!("Shimlink exec: {:?}", cmd_vec);
 
-    // Set up signal forwarding
-    process::setup_signal_forwarding();
+    let exit_code = process::spawn_and_wait(&cmd_vec[0], &cmd_vec[1..])?;
 
-    // Spawn child in a new session (matching exec.rs pattern)
-    let child = unsafe {
-        std::process::Command::new(&cmd_vec[0])
-            .args(&cmd_vec[1..])
-            .pre_exec(|| {
-                nix::unistd::setsid()
-                    .map_err(|e| std::io::Error::from_raw_os_error(e as i32))?;
-                Ok(())
-            })
-            .spawn()
-            .with_context(|| format!("Failed to spawn: {}", cmd_vec[0]))?
-    };
-
-    let child_pid = child.id() as i32;
-    process::CHILD_PID.store(child_pid, Ordering::SeqCst);
-
-    let mut child = child;
-    let status = child.wait().context("Failed to wait on child process")?;
-
-    std::process::exit(status.code().unwrap_or(1));
+    std::process::exit(exit_code);
 }
 
 // ─── command construction ────────────────────────────────────────────────────
@@ -208,8 +146,8 @@ pub fn build_docker_command(
     // User mapping (unless no_user)
     if !pkg.no_user {
         // Get uid:gid for --user flag
-        let uid = get_id("-u");
-        let gid = get_id("-g");
+        let uid = nix::unistd::getuid();
+        let gid = nix::unistd::getgid();
         cmd.push(format!("--user={}:{}", uid, gid));
     }
 
@@ -287,14 +225,10 @@ pub fn build_apptainer_command(
     interactive: bool,
     engine_path: &str,
 ) -> Vec<String> {
-    let (img_ns, img_name, _img_tag) = parse_docker_image_path(&pkg.docker_image);
-    let apptainer_image = format!("{}-{}.sif", img_ns, img_name);
-    let apptainer_fullpath = config
-        .bulker
-        .apptainer_image_folder
-        .as_deref()
-        .map(|f| format!("{}/{}", f, apptainer_image))
-        .unwrap_or_else(|| apptainer_image.clone());
+    let (_, apptainer_fullpath) = crate::manifest::apptainer_image_paths(
+        &pkg.docker_image,
+        config.bulker.apptainer_image_folder.as_deref(),
+    );
 
     let mut cmd = vec![engine_path.to_string(), "exec".to_string()];
 
@@ -404,18 +338,6 @@ pub fn resolve_arg_paths(args: &[String]) -> (Vec<String>, Vec<String>) {
     (resolved_args, auto_mount_dirs)
 }
 
-/// Apply path map translation for bulker-in-docker scenarios.
-/// If the path starts with a known prefix, replace it with the mapped prefix.
-#[allow(dead_code)]
-pub fn apply_path_map(path: &str, path_map: &[(String, String)]) -> String {
-    for (from, to) in path_map {
-        if path.starts_with(from.as_str()) {
-            return format!("{}{}", to, &path[from.len()..]);
-        }
-    }
-    path.to_string()
-}
-
 // ─── command lookup with imports ─────────────────────────────────────────────
 
 /// Find a command by searching the primary crate manifest and all its imports.
@@ -512,22 +434,6 @@ pub fn create_shimlink_dir(manifest: &Manifest, dir: &Path) -> Result<()> {
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
-
-/// Get the current user/group ID by running `id`.
-fn get_id(flag: &str) -> String {
-    std::process::Command::new("id")
-        .arg(flag)
-        .output()
-        .ok()
-        .and_then(|o| {
-            if o.status.success() {
-                Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
-            } else {
-                None
-            }
-        })
-        .unwrap_or_else(|| "0".to_string())
-}
 
 /// Simple shell-like argument splitting (handles quoted strings).
 fn shell_split(s: &str) -> Vec<String> {
@@ -638,34 +544,6 @@ mod tests {
     }
 
     #[test]
-    fn test_apply_path_map_matching_prefix() {
-        let path_map = vec![
-            ("/host/data".to_string(), "/container/data".to_string()),
-        ];
-        assert_eq!(
-            apply_path_map("/host/data/file.txt", &path_map),
-            "/container/data/file.txt"
-        );
-    }
-
-    #[test]
-    fn test_apply_path_map_no_match() {
-        let path_map = vec![
-            ("/host/data".to_string(), "/container/data".to_string()),
-        ];
-        assert_eq!(
-            apply_path_map("/other/path/file.txt", &path_map),
-            "/other/path/file.txt"
-        );
-    }
-
-    #[test]
-    fn test_apply_path_map_empty() {
-        let path_map: Vec<(String, String)> = vec![];
-        assert_eq!(apply_path_map("/any/path", &path_map), "/any/path");
-    }
-
-    #[test]
     fn test_shell_split_simple() {
         let result = shell_split("--gpus all --shm-size 8g");
         assert_eq!(result, vec!["--gpus", "all", "--shm-size", "8g"]);
@@ -685,21 +563,11 @@ mod tests {
 
     #[test]
     fn test_build_docker_command_basic() {
-        let config = make_test_config();
+        let config = BulkerConfig::test_default();
         let pkg = PackageCommand {
             command: "samtools".to_string(),
             docker_image: "quay.io/biocontainers/samtools:1.9".to_string(),
-            docker_command: None,
-            docker_args: None,
-            dockerargs: None,
-            apptainer_args: None,
-            apptainer_command: None,
-            volumes: vec![],
-            envvars: vec![],
-            no_user: false,
-            no_network: false,
-            no_default_volumes: false,
-            workdir: None,
+            ..Default::default()
         };
         let volumes = vec!["/home/user".to_string()];
         let envvars = vec!["DISPLAY".to_string()];
@@ -726,21 +594,11 @@ mod tests {
 
     #[test]
     fn test_build_docker_command_interactive() {
-        let config = make_test_config();
+        let config = BulkerConfig::test_default();
         let pkg = PackageCommand {
             command: "samtools".to_string(),
             docker_image: "quay.io/biocontainers/samtools:1.9".to_string(),
-            docker_command: None,
-            docker_args: None,
-            dockerargs: None,
-            apptainer_args: None,
-            apptainer_command: None,
-            volumes: vec![],
-            envvars: vec![],
-            no_user: false,
-            no_network: false,
-            no_default_volumes: false,
-            workdir: None,
+            ..Default::default()
         };
         let cmd = build_docker_command(&config, &pkg, &[], &[], "", &[], true, "docker");
         assert!(cmd.contains(&"-it".to_string()));
@@ -749,21 +607,12 @@ mod tests {
 
     #[test]
     fn test_build_docker_command_no_user() {
-        let config = make_test_config();
+        let config = BulkerConfig::test_default();
         let pkg = PackageCommand {
             command: "tool".to_string(),
             docker_image: "myimage:latest".to_string(),
-            docker_command: None,
-            docker_args: None,
-            dockerargs: None,
-            apptainer_args: None,
-            apptainer_command: None,
-            volumes: vec![],
-            envvars: vec![],
             no_user: true,
-            no_network: false,
-            no_default_volumes: false,
-            workdir: None,
+            ..Default::default()
         };
         let cmd = build_docker_command(&config, &pkg, &[], &[], "", &[], false, "docker");
         // Should NOT contain --user= or system volumes
@@ -774,22 +623,12 @@ mod tests {
 
     #[test]
     fn test_build_docker_command_host_network_disabled() {
-        let mut config = make_test_config();
+        let mut config = BulkerConfig::test_default();
         config.bulker.host_network = false;
         let pkg = PackageCommand {
             command: "tool".to_string(),
             docker_image: "myimage:latest".to_string(),
-            docker_command: None,
-            docker_args: None,
-            dockerargs: None,
-            apptainer_args: None,
-            apptainer_command: None,
-            volumes: vec![],
-            envvars: vec![],
-            no_user: false,
-            no_network: false,
-            no_default_volumes: false,
-            workdir: None,
+            ..Default::default()
         };
         let cmd = build_docker_command(&config, &pkg, &[], &[], "", &[], false, "docker");
         assert!(!cmd.contains(&"--network=host".to_string()));
@@ -797,22 +636,12 @@ mod tests {
 
     #[test]
     fn test_build_docker_command_system_volumes_disabled() {
-        let mut config = make_test_config();
+        let mut config = BulkerConfig::test_default();
         config.bulker.system_volumes = false;
         let pkg = PackageCommand {
             command: "tool".to_string(),
             docker_image: "myimage:latest".to_string(),
-            docker_command: None,
-            docker_args: None,
-            dockerargs: None,
-            apptainer_args: None,
-            apptainer_command: None,
-            volumes: vec![],
-            envvars: vec![],
-            no_user: false,
-            no_network: false,
-            no_default_volumes: false,
-            workdir: None,
+            ..Default::default()
         };
         let cmd = build_docker_command(&config, &pkg, &[], &[], "", &[], false, "docker");
         let cmd_str = cmd.join(" ");
@@ -821,21 +650,12 @@ mod tests {
 
     #[test]
     fn test_build_docker_command_no_network() {
-        let config = make_test_config();
+        let config = BulkerConfig::test_default();
         let pkg = PackageCommand {
             command: "tool".to_string(),
             docker_image: "myimage:latest".to_string(),
-            docker_command: None,
-            docker_args: None,
-            dockerargs: None,
-            apptainer_args: None,
-            apptainer_command: None,
-            volumes: vec![],
-            envvars: vec![],
-            no_user: false,
             no_network: true,
-            no_default_volumes: false,
-            workdir: None,
+            ..Default::default()
         };
         let cmd = build_docker_command(&config, &pkg, &[], &[], "", &[], false, "docker");
         assert!(!cmd.contains(&"--network=host".to_string()));
@@ -843,21 +663,12 @@ mod tests {
 
     #[test]
     fn test_build_docker_command_with_docker_command() {
-        let config = make_test_config();
+        let config = BulkerConfig::test_default();
         let pkg = PackageCommand {
             command: "python".to_string(),
             docker_image: "python:3.9".to_string(),
             docker_command: Some("python3".to_string()),
-            docker_args: None,
-            dockerargs: None,
-            apptainer_args: None,
-            apptainer_command: None,
-            volumes: vec![],
-            envvars: vec![],
-            no_user: false,
-            no_network: false,
-            no_default_volumes: false,
-            workdir: None,
+            ..Default::default()
         };
         let cmd = build_docker_command(&config, &pkg, &[], &[], "", &["--version".to_string()], false, "docker");
         // Should use docker_command instead of command
@@ -866,22 +677,12 @@ mod tests {
 
     #[test]
     fn test_build_apptainer_command_basic() {
-        let mut config = make_test_config();
+        let mut config = BulkerConfig::test_default();
         config.bulker.apptainer_image_folder = Some("/tmp/sif".to_string());
         let pkg = PackageCommand {
             command: "samtools".to_string(),
             docker_image: "quay.io/biocontainers/samtools:1.9".to_string(),
-            docker_command: None,
-            docker_args: None,
-            dockerargs: None,
-            apptainer_args: None,
-            apptainer_command: None,
-            volumes: vec![],
-            envvars: vec![],
-            no_user: false,
-            no_network: false,
-            no_default_volumes: false,
-            workdir: None,
+            ..Default::default()
         };
 
         let cmd = build_apptainer_command(&config, &pkg, &[], &[], &[], false, "apptainer");
@@ -955,22 +756,15 @@ mod tests {
 
     #[test]
     fn test_no_default_volumes_skips_config_volumes() {
-        let config = make_test_config();
+        let config = BulkerConfig::test_default();
         // config has volumes: ["$HOME"]
         let pkg_with_flag = PackageCommand {
             command: "postgres".to_string(),
             docker_image: "postgres:16".to_string(),
-            docker_command: None,
-            docker_args: None,
-            dockerargs: None,
-            apptainer_args: None,
-            apptainer_command: None,
             volumes: vec!["/data".to_string()],
-            envvars: vec![],
             no_user: true,
-            no_network: false,
             no_default_volumes: true,
-            workdir: None,
+            ..Default::default()
         };
 
         // Simulate the volume merge logic from shimlink_exec
@@ -985,17 +779,9 @@ mod tests {
         let pkg_without_flag = PackageCommand {
             command: "postgres".to_string(),
             docker_image: "postgres:16".to_string(),
-            docker_command: None,
-            docker_args: None,
-            dockerargs: None,
-            apptainer_args: None,
-            apptainer_command: None,
             volumes: vec!["/data".to_string()],
-            envvars: vec![],
             no_user: true,
-            no_network: false,
-            no_default_volumes: false,
-            workdir: None,
+            ..Default::default()
         };
         let volumes_without_flag = if pkg_without_flag.no_default_volumes {
             Vec::new()
@@ -1008,34 +794,24 @@ mod tests {
 
     #[test]
     fn test_engine_path_accessor_returns_absolute_when_set() {
-        let mut config = make_test_config();
+        let mut config = BulkerConfig::test_default();
         config.bulker.engine_path = Some("/usr/bin/docker".to_string());
         assert_eq!(config.engine_path(), "/usr/bin/docker");
     }
 
     #[test]
     fn test_engine_path_accessor_falls_back_to_engine_name() {
-        let config = make_test_config();
+        let config = BulkerConfig::test_default();
         assert_eq!(config.engine_path(), "docker");
     }
 
     #[test]
     fn test_build_docker_command_uses_engine_path() {
-        let config = make_test_config();
+        let config = BulkerConfig::test_default();
         let pkg = PackageCommand {
             command: "samtools".to_string(),
             docker_image: "quay.io/biocontainers/samtools:1.9".to_string(),
-            docker_command: None,
-            docker_args: None,
-            dockerargs: None,
-            apptainer_args: None,
-            apptainer_command: None,
-            volumes: vec![],
-            envvars: vec![],
-            no_user: false,
-            no_network: false,
-            no_default_volumes: false,
-            workdir: None,
+            ..Default::default()
         };
         let cmd = build_docker_command(&config, &pkg, &[], &[], "", &[], false, "/usr/bin/docker");
         assert_eq!(cmd[0], "/usr/bin/docker");
@@ -1043,22 +819,12 @@ mod tests {
 
     #[test]
     fn test_build_apptainer_command_uses_engine_path() {
-        let mut config = make_test_config();
+        let mut config = BulkerConfig::test_default();
         config.bulker.apptainer_image_folder = Some("/tmp/sif".to_string());
         let pkg = PackageCommand {
             command: "samtools".to_string(),
             docker_image: "quay.io/biocontainers/samtools:1.9".to_string(),
-            docker_command: None,
-            docker_args: None,
-            dockerargs: None,
-            apptainer_args: None,
-            apptainer_command: None,
-            volumes: vec![],
-            envvars: vec![],
-            no_user: false,
-            no_network: false,
-            no_default_volumes: false,
-            workdir: None,
+            ..Default::default()
         };
         let cmd = build_apptainer_command(&config, &pkg, &[], &[], &[], false, "/usr/local/bin/apptainer");
         assert_eq!(cmd[0], "/usr/local/bin/apptainer");
@@ -1066,30 +832,15 @@ mod tests {
 
     /// Helper to build a PackageCommand with default fields.
     fn make_empty_pkg() -> PackageCommand {
-        PackageCommand {
-            command: String::new(),
-            docker_image: String::new(),
-            docker_command: None,
-            docker_args: None,
-            dockerargs: None,
-            apptainer_args: None,
-            apptainer_command: None,
-            volumes: vec![],
-            envvars: vec![],
-            no_user: false,
-            no_network: false,
-            no_default_volumes: false,
-            workdir: None,
-        }
+        PackageCommand::default()
     }
 
     #[test]
     fn test_find_command_in_imported_crate() {
         let tmpdir = tempfile::tempdir().unwrap();
-        let old_val = std::env::var("XDG_CONFIG_HOME").ok();
-        unsafe { std::env::set_var("XDG_CONFIG_HOME", tmpdir.path()); }
+        let _guard = crate::test_util::EnvGuard::set("XDG_CONFIG_HOME", tmpdir.path());
 
-        let config = make_test_config();
+        let config = BulkerConfig::test_default();
 
         // Child crate: bulker/coreutils_shimtest with "cat" command
         let child_cv = CrateVars {
@@ -1141,36 +892,7 @@ mod tests {
         let pkg2 = find_command_in_crate_with_imports(&config, &parent_cv, "samtools").unwrap();
         assert_eq!(pkg2.command, "samtools");
 
-        // Restore env
-        match old_val {
-            Some(v) => unsafe { std::env::set_var("XDG_CONFIG_HOME", v); },
-            None => unsafe { std::env::remove_var("XDG_CONFIG_HOME"); },
-        }
+        // EnvGuard restores XDG_CONFIG_HOME on drop
     }
 
-    /// Helper to build a minimal BulkerConfig for tests.
-    fn make_test_config() -> BulkerConfig {
-        BulkerConfig {
-            bulker: crate::config::BulkerSettings {
-                container_engine: "docker".to_string(),
-                default_namespace: "bulker".to_string(),
-                registry_url: "http://hub.bulker.io/".to_string(),
-                shell_path: "/bin/bash".to_string(),
-                shell_rc: "$HOME/.bashrc".to_string(),
-                executable_template: "docker_executable.tera".to_string(),
-                shell_template: "docker_shell.tera".to_string(),
-                build_template: "docker_build.tera".to_string(),
-                rcfile: "start.sh".to_string(),
-                rcfile_strict: "start_strict.sh".to_string(),
-                volumes: vec!["$HOME".to_string()],
-                envvars: vec!["DISPLAY".to_string()],
-                host_network: true,
-                system_volumes: true,
-                tool_args: None,
-                shell_prompt: None,
-                apptainer_image_folder: None,
-                engine_path: None,
-            },
-        }
-    }
 }

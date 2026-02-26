@@ -40,7 +40,7 @@ pub fn run(matches: &ArgMatches) -> Result<()> {
     let verbose = matches.get_flag("verbose");
     let resolve = matches.get_flag("resolve");
 
-    let cv = parse_registry_path(registry_path, &config.bulker.default_namespace);
+    let cv = parse_registry_path(registry_path, &config.bulker.default_namespace)?;
     let manifest = manifest_cache::load_cached(&cv)?
         .ok_or_else(|| anyhow::anyhow!(
             "Crate '{}' is not cached. Run 'bulker crate install {}' first.",

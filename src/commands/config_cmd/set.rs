@@ -30,7 +30,17 @@ pub fn run(matches: &ArgMatches) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("Expected key=value format, got: '{}'", kv))?;
 
     match key {
-        "container_engine" => config.bulker.container_engine = value.to_string(),
+        "container_engine" => {
+            config.bulker.container_engine = value.to_string();
+            config.bulker.engine_path = crate::config::resolve_engine_path(value);
+            if config.bulker.engine_path.is_none() {
+                eprintln!(
+                    "Warning: '{}' not found in PATH. engine_path not set. \
+                     Run `bulker config init` to regenerate config after installing the engine.",
+                    value
+                );
+            }
+        }
         "default_namespace" => config.bulker.default_namespace = value.to_string(),
         "registry_url" => config.bulker.registry_url = value.to_string(),
         "shell_path" => config.bulker.shell_path = value.to_string(),

@@ -1,10 +1,8 @@
 //! Crate activation: resolve a registry path to cached manifests, create an
-//! ephemeral shimlink directory in /tmp, and exec a subshell with the shimlink
+//! ephemeral shimlink directory, and exec a subshell with the shimlink
 //! dir prepended to PATH. Auto-fetches manifests from the registry if not cached.
 
-use anyhow::{Result, bail};
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
+use anyhow::{Context, Result, bail};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 
@@ -13,31 +11,35 @@ use crate::imports;
 use crate::manifest::CrateVars;
 use crate::shimlink;
 
+/// Result of building a new PATH: the full PATH string and the shimdir path.
+pub struct ActivationResult {
+    /// The full PATH string (shimdir only in strict mode, shimdir:existing in normal mode).
+    pub path: String,
+    /// The shimlink directory path (for cleanup on deactivation).
+    pub shimdir: String,
+}
+
 /// Build the new PATH using shimlink directories.
 /// Creates a temp directory with symlinks to the bulker binary for each command,
 /// then returns the PATH string with the shimlink dir prepended.
 /// Auto-fetches manifests from the registry if not cached locally.
-pub fn get_new_path(config: &BulkerConfig, cratelist: &[CrateVars], strict: bool, force: bool) -> Result<String> {
-    // Build a stable hash for the crate list so the shimdir is reusable across invocations
-    let mut hasher = DefaultHasher::new();
-    for cv in cratelist {
-        cv.display_name().hash(&mut hasher);
-    }
-    let hash = hasher.finish();
-    let shimdir = PathBuf::from(format!("/tmp/bulker_{:016x}", hash));
+pub fn get_new_path(config: &BulkerConfig, cratelist: &[CrateVars], strict: bool, force: bool) -> Result<ActivationResult> {
+    // Each activation gets its own shimdir. Sharing a shimdir between shells
+    // is a correctness bug: re-activation nukes a live shell's PATH.
+    let shimdir = tempfile::Builder::new()
+        .prefix("bulker_")
+        .tempdir()
+        .context("Failed to create shimlink temp directory")?
+        .keep();
 
     // Auto-fetch: ensure all manifests (and their imports) are cached
     for cv in cratelist {
-        crate::manifest_cache::ensure_cached_with_imports(config, cv, force)?;
+        let mut visited = std::collections::HashSet::new();
+        crate::manifest_cache::ensure_cached_with_imports(config, cv, force, &mut visited, 0)?;
     }
 
     // Resolve all crates including imports (reads from manifest cache, not config)
     let all_cratevars = imports::resolve_cratevars_with_imports(config, cratelist)?;
-
-    // Create (or refresh) the shimlink directory
-    if shimdir.exists() {
-        let _ = std::fs::remove_dir_all(&shimdir);
-    }
 
     let mut has_host_commands = false;
     for cv in &all_cratevars {
@@ -50,15 +52,17 @@ pub fn get_new_path(config: &BulkerConfig, cratelist: &[CrateVars], strict: bool
 
     let shimdir_str = shimdir.to_string_lossy().to_string();
 
-    if strict {
+    let path = if strict {
         if !has_host_commands {
             eprintln!("Note: Strict mode active with no host_commands. Only crate commands are on PATH.");
         }
-        Ok(shimdir_str)
+        shimdir_str.clone()
     } else {
         let current_path = std::env::var("PATH").unwrap_or_default();
-        Ok(format!("{}:{}", shimdir_str, current_path))
-    }
+        format!("{}:{}", shimdir_str, current_path)
+    };
+
+    Ok(ActivationResult { path, shimdir: shimdir_str })
 }
 
 /// Determine the shell type from a shell path.
@@ -113,7 +117,9 @@ pub fn activate(
     prompt: bool,
     force: bool,
 ) -> Result<()> {
-    let newpath = get_new_path(config, cratelist, strict, force)?;
+    let result = get_new_path(config, cratelist, strict, force)?;
+    let newpath = &result.path;
+    let shimdir = &result.shimdir;
     // Use the first crate's display_name for BULKERCRATE (shimlink needs this to find the manifest)
     let crate_id = cratelist.first()
         .map(|cv| cv.display_name())
@@ -172,6 +178,7 @@ pub fn activate(
             println!("export BULKERCFG=\"{}\"", cp.display());
         }
         println!("export BULKERPATH=\"{}\"", newpath);
+        println!("export BULKER_SHIMDIR=\"{}\"", shimdir);
         if prompt {
             println!("export BULKERPROMPT=\"{}\"", ps1);
         }
@@ -187,7 +194,8 @@ pub fn activate(
         if let Some(cp) = config_path {
             std::env::set_var("BULKERCFG", cp.to_string_lossy().as_ref());
         }
-        std::env::set_var("BULKERPATH", &newpath);
+        std::env::set_var("BULKERPATH", newpath);
+        std::env::set_var("BULKER_SHIMDIR", shimdir);
         if prompt {
             std::env::set_var("BULKERPROMPT", &ps1);
         }

@@ -12,13 +12,13 @@ categories = ["command-line-utilities", "development-tools"]
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
 serde = { version = "1", features = ["derive"] }
-serde_yaml = "0.9"
+serde_yml = "0.0.12"
 tera = "1"
 ureq = "2"
 log = "0.4"
 env_logger = "0.11"
 anyhow = "1"
-nix = { version = "0.29", features = ["signal", "process"] }
+nix = { version = "0.29", features = ["signal", "process", "user"] }
 signal-hook = "0.3"
 shell-escape = "0.1"
 dirs = "6"

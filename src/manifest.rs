@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::config::BulkerConfig;
@@ -37,10 +37,8 @@ pub struct Manifest {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ManifestInner {
     #[serde(default)]
-    #[allow(dead_code)]
     pub name: Option<String>,
     #[serde(default)]
-    #[allow(dead_code)]
     pub version: Option<String>,
     #[serde(default, deserialize_with = "null_as_empty_vec")]
     pub commands: Vec<PackageCommand>,
@@ -51,7 +49,7 @@ pub struct ManifestInner {
 }
 
 /// A single command entry in the manifest.
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
 pub struct PackageCommand {
     pub command: String,
     pub docker_image: String,
@@ -79,10 +77,47 @@ pub struct PackageCommand {
     pub workdir: Option<String>,
 }
 
+impl PackageCommand {
+    /// Merge docker_args from the command's `dockerargs` and `docker_args` fields,
+    /// plus any extra args passed in (e.g., host-tool-specific or environment).
+    pub(crate) fn merged_docker_args(&self, extra_args: &[&str]) -> String {
+        let mut all = String::new();
+        if let Some(ref da) = self.dockerargs {
+            all.push_str(da);
+        }
+        if let Some(ref da) = self.docker_args {
+            if !all.is_empty() { all.push(' '); }
+            all.push_str(da);
+        }
+        for extra in extra_args {
+            if !extra.is_empty() {
+                if !all.is_empty() { all.push(' '); }
+                all.push_str(extra);
+            }
+        }
+        all
+    }
+}
+
+/// Validate that a crate path component contains only safe characters.
+/// Allowed: alphanumeric, hyphen, underscore, dot.
+fn validate_crate_component(s: &str, label: &str) -> Result<()> {
+    if s.is_empty() {
+        bail!("Empty {} in crate path", label);
+    }
+    if !s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.') {
+        bail!(
+            "Invalid {} '{}': only alphanumeric characters, hyphens, underscores, and dots are allowed",
+            label, s
+        );
+    }
+    Ok(())
+}
+
 /// Parse a single registry path string like "namespace/crate:tag".
 ///
 /// Defaults: namespace = default_namespace (from config), tag = "default".
-pub fn parse_registry_path(path: &str, default_namespace: &str) -> CrateVars {
+pub fn parse_registry_path(path: &str, default_namespace: &str) -> Result<CrateVars> {
     let path = path.trim();
 
     // Split on ':'  to separate name from tag
@@ -99,15 +134,19 @@ pub fn parse_registry_path(path: &str, default_namespace: &str) -> CrateVars {
         (default_namespace.to_string(), name_part.to_string())
     };
 
-    CrateVars {
+    validate_crate_component(&namespace, "namespace")?;
+    validate_crate_component(&crate_name, "crate name")?;
+    validate_crate_component(&tag, "tag")?;
+
+    Ok(CrateVars {
         namespace,
         crate_name,
         tag,
-    }
+    })
 }
 
 /// Parse comma-separated registry paths.
-pub fn parse_registry_paths(paths: &str, default_namespace: &str) -> Vec<CrateVars> {
+pub fn parse_registry_paths(paths: &str, default_namespace: &str) -> Result<Vec<CrateVars>> {
     paths
         .split(',')
         .map(|p| parse_registry_path(p.trim(), default_namespace))
@@ -144,7 +183,7 @@ pub fn load_remote_manifest(
     registry_path: &str,
     filepath: Option<&str>,
 ) -> Result<(Manifest, CrateVars)> {
-    let cratevars = parse_registry_path(registry_path, &config.bulker.default_namespace);
+    let cratevars = parse_registry_path(registry_path, &config.bulker.default_namespace)?;
     let url = build_manifest_url(config, &cratevars, filepath);
 
     log::debug!("Loading manifest from: {}", url);
@@ -160,10 +199,60 @@ pub fn load_remote_manifest(
             .with_context(|| format!("Failed to read manifest file: {}", url))?
     };
 
-    let manifest: Manifest = serde_yaml::from_str(&contents)
+    let manifest: Manifest = serde_yml::from_str(&contents)
         .with_context(|| format!("Failed to parse manifest YAML from: {}", url))?;
 
     Ok((manifest, cratevars))
+}
+
+/// Detect if a crate argument is a local file path (as opposed to a registry path).
+pub(crate) fn is_local_path(s: &str) -> bool {
+    s.starts_with('.')
+        || s.starts_with('/')
+        || s.ends_with(".yaml")
+        || s.ends_with(".yml")
+}
+
+/// Load a local manifest file, returning the parsed Manifest and derived CrateVars.
+pub(crate) fn load_local_manifest(path: &str) -> Result<(CrateVars, Manifest)> {
+    let file_path = std::path::Path::new(path);
+    let contents = std::fs::read_to_string(file_path)
+        .map_err(|e| anyhow::anyhow!("Failed to read local manifest '{}': {}", path, e))?;
+    let manifest: Manifest = serde_yml::from_str(&contents)
+        .map_err(|e| anyhow::anyhow!("Failed to parse local manifest '{}': {}", path, e))?;
+
+    let stem = file_path
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "local".to_string());
+    let cv = CrateVars {
+        namespace: "local".to_string(),
+        crate_name: stem,
+        tag: "default".to_string(),
+    };
+
+    Ok((cv, manifest))
+}
+
+/// Merge a secondary list into a primary list, appending items not already present.
+/// Preserves order of the primary list, appends new items in secondary order.
+pub(crate) fn merge_lists(primary: &mut Vec<String>, secondary: &[String]) {
+    for item in secondary {
+        if !primary.contains(item) {
+            primary.push(item.clone());
+        }
+    }
+}
+
+/// Compute the apptainer SIF image filename and full path for a docker image.
+/// Returns (image_filename, full_path) where full_path includes the image folder if configured.
+pub(crate) fn apptainer_image_paths(docker_image: &str, image_folder: Option<&str>) -> (String, String) {
+    let (img_ns, img_name, _img_tag) = parse_docker_image_path(docker_image);
+    let image_filename = format!("{}-{}.sif", img_ns, img_name);
+    let full_path = image_folder
+        .map(|f| format!("{}/{}", f, image_filename))
+        .unwrap_or_else(|| image_filename.clone());
+    (image_filename, full_path)
 }
 
 /// Parse a docker image path into (namespace, image_name, tag) for apptainer.
@@ -191,7 +280,7 @@ mod tests {
 
     #[test]
     fn test_parse_registry_path_full() {
-        let cv = parse_registry_path("myns/mycrate:v1.0", "bulker");
+        let cv = parse_registry_path("myns/mycrate:v1.0", "bulker").unwrap();
         assert_eq!(cv.namespace, "myns");
         assert_eq!(cv.crate_name, "mycrate");
         assert_eq!(cv.tag, "v1.0");
@@ -199,7 +288,7 @@ mod tests {
 
     #[test]
     fn test_parse_registry_path_no_namespace() {
-        let cv = parse_registry_path("mycrate:v1.0", "bulker");
+        let cv = parse_registry_path("mycrate:v1.0", "bulker").unwrap();
         assert_eq!(cv.namespace, "bulker");
         assert_eq!(cv.crate_name, "mycrate");
         assert_eq!(cv.tag, "v1.0");
@@ -207,7 +296,7 @@ mod tests {
 
     #[test]
     fn test_parse_registry_path_no_tag() {
-        let cv = parse_registry_path("myns/mycrate", "bulker");
+        let cv = parse_registry_path("myns/mycrate", "bulker").unwrap();
         assert_eq!(cv.namespace, "myns");
         assert_eq!(cv.crate_name, "mycrate");
         assert_eq!(cv.tag, "default");
@@ -215,7 +304,7 @@ mod tests {
 
     #[test]
     fn test_parse_registry_path_bare() {
-        let cv = parse_registry_path("mycrate", "bulker");
+        let cv = parse_registry_path("mycrate", "bulker").unwrap();
         assert_eq!(cv.namespace, "bulker");
         assert_eq!(cv.crate_name, "mycrate");
         assert_eq!(cv.tag, "default");
@@ -223,7 +312,7 @@ mod tests {
 
     #[test]
     fn test_parse_registry_paths_comma() {
-        let paths = parse_registry_paths("a/b:1,c/d:2", "bulker");
+        let paths = parse_registry_paths("a/b:1,c/d:2", "bulker").unwrap();
         assert_eq!(paths.len(), 2);
         assert_eq!(paths[0].namespace, "a");
         assert_eq!(paths[0].crate_name, "b");
@@ -234,8 +323,43 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_registry_path_rejects_shell_injection() {
+        assert!(parse_registry_path("demo$(whoami)", "bulker").is_err());
+    }
+
+    #[test]
+    fn test_parse_registry_path_rejects_semicolon() {
+        assert!(parse_registry_path("demo;rm -rf /", "bulker").is_err());
+    }
+
+    #[test]
+    fn test_parse_registry_path_rejects_backtick() {
+        assert!(parse_registry_path("demo`whoami`", "bulker").is_err());
+    }
+
+    #[test]
+    fn test_parse_registry_path_rejects_spaces() {
+        assert!(parse_registry_path("demo crate", "bulker").is_err());
+    }
+
+    #[test]
+    fn test_parse_registry_path_rejects_quotes() {
+        assert!(parse_registry_path("demo\"crate", "bulker").is_err());
+    }
+
+    #[test]
+    fn test_parse_registry_path_accepts_valid_names() {
+        assert!(parse_registry_path("my-ns/my_crate.v2:1.0.0", "bulker").is_ok());
+    }
+
+    #[test]
+    fn test_parse_registry_path_rejects_empty_crate_name() {
+        assert!(parse_registry_path("ns/:tag", "bulker").is_err());
+    }
+
+    #[test]
     fn test_build_manifest_url_default_tag_omits_suffix() {
-        let config = make_test_config("http://hub.bulker.io/");
+        let config = crate::config::BulkerConfig::test_with_registry("http://hub.bulker.io/");
         let cv = CrateVars {
             namespace: "bulker".to_string(),
             crate_name: "alpine".to_string(),
@@ -247,7 +371,7 @@ mod tests {
 
     #[test]
     fn test_build_manifest_url_versioned_tag_includes_suffix() {
-        let config = make_test_config("http://hub.bulker.io/");
+        let config = crate::config::BulkerConfig::test_with_registry("http://hub.bulker.io/");
         let cv = CrateVars {
             namespace: "databio".to_string(),
             crate_name: "pepatac".to_string(),
@@ -265,7 +389,7 @@ mod tests {
   host_commands:
   - ls
 "#;
-        let manifest: Manifest = serde_yaml::from_str(yaml).unwrap();
+        let manifest: Manifest = serde_yml::from_str(yaml).unwrap();
         assert!(manifest.manifest.commands.is_empty());
         assert_eq!(manifest.manifest.host_commands, vec!["ls"]);
     }
@@ -279,7 +403,7 @@ mod tests {
     docker_image: nsheff/cowsay
   host_commands: null
 "#;
-        let manifest: Manifest = serde_yaml::from_str(yaml).unwrap();
+        let manifest: Manifest = serde_yml::from_str(yaml).unwrap();
         assert_eq!(manifest.manifest.commands.len(), 1);
         assert!(manifest.manifest.host_commands.is_empty());
     }
@@ -291,35 +415,10 @@ mod tests {
   commands: []
   imports: null
 "#;
-        let manifest: Manifest = serde_yaml::from_str(yaml).unwrap();
+        let manifest: Manifest = serde_yml::from_str(yaml).unwrap();
         assert!(manifest.manifest.imports.is_empty());
     }
 
-    /// Helper to build a minimal BulkerConfig for URL tests.
-    fn make_test_config(registry_url: &str) -> crate::config::BulkerConfig {
-        crate::config::BulkerConfig {
-            bulker: crate::config::BulkerSettings {
-                container_engine: "docker".to_string(),
-                default_namespace: "bulker".to_string(),
-                registry_url: registry_url.to_string(),
-                shell_path: "/bin/bash".to_string(),
-                shell_rc: "$HOME/.bashrc".to_string(),
-                executable_template: "docker_executable.tera".to_string(),
-                shell_template: "docker_shell.tera".to_string(),
-                build_template: "docker_build.tera".to_string(),
-                rcfile: "start.sh".to_string(),
-                rcfile_strict: "start_strict.sh".to_string(),
-                volumes: vec!["$HOME".to_string()],
-                envvars: vec!["DISPLAY".to_string()],
-                host_network: true,
-                system_volumes: true,
-                tool_args: None,
-                shell_prompt: None,
-                apptainer_image_folder: None,
-                engine_path: None,
-            },
-        }
-    }
 
     #[test]
     fn test_parse_docker_image_path() {

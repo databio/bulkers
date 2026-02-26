@@ -19,11 +19,8 @@ use crate::manifest::Manifest;
 
 /// Compute GA4GH sha512t24u digest: SHA-512 truncated to 24 bytes, base64url encoded.
 pub fn sha512t24u<T: AsRef<[u8]>>(input: T) -> String {
-    let mut hasher = Box::new(Sha512::new());
-    for chunk in input.as_ref().chunks(1024) {
-        hasher.as_mut().update(chunk);
-    }
-    base64_url::encode(&hasher.as_mut().finalize_reset()[0..24])
+    let hash = Sha512::digest(input.as_ref());
+    base64_url::encode(&hash[0..24])
 }
 
 /// RFC-8785 JSON Canonicalization Scheme (JCS).
@@ -96,14 +93,14 @@ pub struct CrateDigestResult {
     pub pair_digests: Vec<(String, String, String)>, // (command, image, pair_digest)
 }
 
-/// Compute the crate-manifest-digest from tag strings as written in the manifest.
-pub fn crate_manifest_digest(manifest: &Manifest) -> CrateDigestResult {
+/// Core digest computation from a list of (command, image_string) pairs.
+fn compute_digest_from_pairs(pairs: &[(String, String)]) -> CrateDigestResult {
     let mut pair_digests = Vec::new();
     let mut digest_strings = Vec::new();
 
-    for cmd in &manifest.manifest.commands {
-        let pd = digest_pair(&cmd.command, &cmd.docker_image);
-        pair_digests.push((cmd.command.clone(), cmd.docker_image.clone(), pd.clone()));
+    for (cmd, img) in pairs {
+        let pd = digest_pair(cmd, img);
+        pair_digests.push((cmd.clone(), img.clone(), pd.clone()));
         digest_strings.push(pd);
     }
 
@@ -122,35 +119,29 @@ pub fn crate_manifest_digest(manifest: &Manifest) -> CrateDigestResult {
     }
 }
 
+/// Compute the crate-manifest-digest from tag strings as written in the manifest.
+pub fn crate_manifest_digest(manifest: &Manifest) -> CrateDigestResult {
+    let pairs: Vec<(String, String)> = manifest.manifest.commands
+        .iter()
+        .map(|cmd| (cmd.command.clone(), cmd.docker_image.clone()))
+        .collect();
+    compute_digest_from_pairs(&pairs)
+}
+
 /// Compute the crate-image-digest from OCI content digests.
 /// Returns `None` if any command's image digest is missing from the map.
 pub fn crate_image_digest(
     manifest: &Manifest,
     oci_digests: &HashMap<String, String>,
 ) -> Option<CrateDigestResult> {
-    let mut pair_digests = Vec::new();
-    let mut digest_strings = Vec::new();
-
-    for cmd in &manifest.manifest.commands {
-        let oci = oci_digests.get(&cmd.docker_image)?;
-        let pd = digest_pair(&cmd.command, oci);
-        pair_digests.push((cmd.command.clone(), oci.clone(), pd.clone()));
-        digest_strings.push(pd);
-    }
-
-    let arr = Value::Array(digest_strings.iter().map(|s| Value::String(s.clone())).collect());
-    let digest = sha512t24u(canonicalize_json(&arr));
-
-    let mut sorted = digest_strings.clone();
-    sorted.sort();
-    let sorted_arr = Value::Array(sorted.into_iter().map(Value::String).collect());
-    let sorted_digest = sha512t24u(canonicalize_json(&sorted_arr));
-
-    Some(CrateDigestResult {
-        digest,
-        sorted_digest,
-        pair_digests,
-    })
+    let pairs: Vec<(String, String)> = manifest.manifest.commands
+        .iter()
+        .map(|cmd| {
+            let oci = oci_digests.get(&cmd.docker_image)?;
+            Some((cmd.command.clone(), oci.clone()))
+        })
+        .collect::<Option<Vec<_>>>()?;
+    Some(compute_digest_from_pairs(&pairs))
 }
 
 // ---------------------------------------------------------------------------
@@ -418,17 +409,7 @@ mod tests {
                     .map(|(cmd, img)| PackageCommand {
                         command: cmd.to_string(),
                         docker_image: img.to_string(),
-                        docker_command: None,
-                        docker_args: None,
-                        dockerargs: None,
-                        apptainer_args: None,
-                        apptainer_command: None,
-                        volumes: vec![],
-                        envvars: vec![],
-                        no_user: false,
-                        no_network: false,
-                        no_default_volumes: false,
-                        workdir: None,
+                        ..Default::default()
                     })
                     .collect(),
                 host_commands: vec![],

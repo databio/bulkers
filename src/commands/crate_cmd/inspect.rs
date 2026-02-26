@@ -27,7 +27,7 @@ pub fn run(matches: &ArgMatches) -> Result<()> {
         None => std::env::var("BULKERCRATE")
             .map_err(|_| anyhow::anyhow!("No crate specified and no active crate (BULKERCRATE not set)"))?,
     };
-    let cratelist = parse_registry_paths(&registry_path, &config.bulker.default_namespace);
+    let cratelist = parse_registry_paths(&registry_path, &config.bulker.default_namespace)?;
 
     for cratevars in &cratelist {
         let manifest = manifest_cache::load_cached(cratevars)?
@@ -72,7 +72,7 @@ pub fn run(matches: &ArgMatches) -> Result<()> {
         if !manifest.manifest.imports.is_empty() {
             println!("Imports:");
             for import in &manifest.manifest.imports {
-                let import_cv = crate::manifest::parse_registry_path(import, &config.bulker.default_namespace);
+                let import_cv = crate::manifest::parse_registry_path(import, &config.bulker.default_namespace)?;
                 match manifest_cache::load_cached(&import_cv) {
                     Ok(Some(m)) => {
                         let count = m.manifest.commands.len() + m.manifest.host_commands.len();

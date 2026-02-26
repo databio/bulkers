@@ -1,7 +1,5 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::{Arg, ArgAction, ArgMatches, Command};
-use std::os::unix::process::CommandExt;
-use std::sync::atomic::Ordering;
 
 use crate::activate::get_new_path;
 use crate::config::load_config;
@@ -59,7 +57,7 @@ pub fn run(matches: &ArgMatches) -> Result<()> {
     let (config, config_path) = load_config(matches.get_one::<String>("config").map(|s| s.as_str()))?;
 
     let registry_paths = matches.get_one::<String>("crate_registry_paths").unwrap();
-    let cratelist = parse_registry_paths(registry_paths, &config.bulker.default_namespace);
+    let cratelist = parse_registry_paths(registry_paths, &config.bulker.default_namespace)?;
     let strict = matches.get_flag("strict");
 
     let cmd_args: Vec<&String> = matches.get_many::<String>("cmd").unwrap().collect();
@@ -69,7 +67,7 @@ pub fn run(matches: &ArgMatches) -> Result<()> {
         unsafe { std::env::set_var("BULKER_PRINT_COMMAND", "1"); }
     }
 
-    let newpath = get_new_path(&config, &cratelist, strict, false)?;
+    let result = get_new_path(&config, &cratelist, strict, false)?;
 
     // Quote arguments with shell-escape
     let quoted_args: Vec<String> = cmd_args
@@ -87,35 +85,16 @@ pub fn run(matches: &ArgMatches) -> Result<()> {
     };
     let merged_command = format!(
         "export PATH=\"{}\"; export BULKERCRATE=\"{}\"; {}{}",
-        newpath,
+        result.path,
         crate_id,
         bulkercfg_export,
         quoted_args.join(" ")
     );
 
-    // Set up signal forwarding
-    process::setup_signal_forwarding();
+    let exit_code = process::spawn_shell_and_wait(&merged_command)?;
 
-    // Spawn child in a new session
-    let child = unsafe {
-        std::process::Command::new("/bin/sh")
-            .arg("-c")
-            .arg(&merged_command)
-            .pre_exec(|| {
-                nix::unistd::setsid()
-                    .map_err(|e| std::io::Error::from_raw_os_error(e as i32))?;
-                Ok(())
-            })
-            .spawn()
-            .context("Failed to spawn child process")?
-    };
+    // Clean up the ephemeral shimdir
+    let _ = std::fs::remove_dir_all(&result.shimdir);
 
-    let child_pid = child.id() as i32;
-    process::CHILD_PID.store(child_pid, Ordering::SeqCst);
-
-    // Wait for child
-    let mut child = child;
-    let status = child.wait().context("Failed to wait on child process")?;
-
-    std::process::exit(status.code().unwrap_or(1));
+    std::process::exit(exit_code);
 }

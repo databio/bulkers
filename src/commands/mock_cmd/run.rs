@@ -46,7 +46,7 @@ pub fn run(matches: &ArgMatches) -> Result<()> {
     let (config, _config_path) = load_config(matches.get_one::<String>("config").map(|s| s.as_str()))?;
 
     let registry_paths = matches.get_one::<String>("crate_registry_paths").unwrap();
-    let cratelist = parse_registry_paths(registry_paths, &config.bulker.default_namespace);
+    let cratelist = parse_registry_paths(registry_paths, &config.bulker.default_namespace)?;
     let strict = matches.get_flag("strict");
     let echo = matches.get_flag("echo");
 

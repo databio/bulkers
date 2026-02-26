@@ -22,7 +22,7 @@ pub fn run(matches: &ArgMatches) -> Result<()> {
     let (config, config_path) = load_config(matches.get_one::<String>("config").map(|s| s.as_str()))?;
 
     if matches.get_flag("effective") {
-        let yaml = serde_yaml::to_string(&config)
+        let yaml = serde_yml::to_string(&config)
             .context("Failed to serialize config")?;
         println!("{}", yaml);
     } else {

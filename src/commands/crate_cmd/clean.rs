@@ -35,7 +35,7 @@ pub fn run(matches: &ArgMatches) -> Result<()> {
         }
     } else if let Some(registry_paths) = matches.get_one::<String>("crate_registry_paths") {
         let (config, _config_path) = load_config(matches.get_one::<String>("config").map(|s| s.as_str()))?;
-        let cratelist = parse_registry_paths(registry_paths, &config.bulker.default_namespace);
+        let cratelist = parse_registry_paths(registry_paths, &config.bulker.default_namespace)?;
         for cv in &cratelist {
             manifest_cache::remove_cached(cv)?;
             println!("Removed: {}", cv.display_name());

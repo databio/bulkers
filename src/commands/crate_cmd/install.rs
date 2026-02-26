@@ -3,7 +3,7 @@ use clap::{Arg, ArgAction, ArgMatches, Command};
 
 use crate::config::load_config;
 use crate::digest;
-use crate::manifest::{parse_registry_paths, CrateVars, Manifest};
+use crate::manifest::{is_local_path, load_local_manifest, parse_registry_paths, CrateVars, Manifest};
 use crate::manifest_cache;
 
 pub fn create_cli() -> Command {
@@ -35,35 +35,6 @@ CRATEFILE FORMAT:
         )
 }
 
-/// Detect if the argument is a local file path.
-fn is_local_path(s: &str) -> bool {
-    s.starts_with('.')
-        || s.starts_with('/')
-        || s.ends_with(".yaml")
-        || s.ends_with(".yml")
-}
-
-/// Load a local manifest file and return (CrateVars, Manifest).
-fn load_local_manifest(path: &str) -> Result<(CrateVars, Manifest)> {
-    let file_path = std::path::Path::new(path);
-    let contents = std::fs::read_to_string(file_path)
-        .map_err(|e| anyhow::anyhow!("Failed to read local manifest '{}': {}", path, e))?;
-    let manifest: Manifest = serde_yaml::from_str(&contents)
-        .map_err(|e| anyhow::anyhow!("Failed to parse local manifest '{}': {}", path, e))?;
-
-    let stem = file_path
-        .file_stem()
-        .map(|s| s.to_string_lossy().to_string())
-        .unwrap_or_else(|| "local".to_string());
-    let cv = CrateVars {
-        namespace: "local".to_string(),
-        crate_name: stem,
-        tag: "default".to_string(),
-    };
-
-    Ok((cv, manifest))
-}
-
 pub fn run(matches: &ArgMatches) -> Result<()> {
     let (config, _config_path) = load_config(matches.get_one::<String>("config").map(|s| s.as_str()))?;
 
@@ -81,9 +52,10 @@ pub fn run(matches: &ArgMatches) -> Result<()> {
         println!("Cached: {}", cv.display_name());
     } else {
         // Registry path(s)
-        let cratelist = parse_registry_paths(cratefile, &config.bulker.default_namespace);
+        let cratelist = parse_registry_paths(cratefile, &config.bulker.default_namespace)?;
         for cv in &cratelist {
-            manifest_cache::ensure_cached_with_imports(&config, cv, true)?;  // always fetch fresh on explicit install
+            let mut visited = std::collections::HashSet::new();
+            manifest_cache::ensure_cached_with_imports(&config, cv, true, &mut visited, 0)?;  // always fetch fresh on explicit install
             if build {
                 let manifest = manifest_cache::load_cached(cv)?.unwrap();
                 manifest_cache::pull_images(&config, &manifest)?;

@@ -12,9 +12,12 @@ mod mock;
 mod process;
 mod shimlink;
 mod templates;
+#[cfg(test)]
+mod test_util;
 
 use anyhow::Result;
 use clap::{Arg, ArgAction, Command};
+use std::os::unix::process::CommandExt;
 
 
 pub mod consts {
@@ -52,6 +55,25 @@ fn main() -> Result<()> {
     if let Some(cmd_name) = shimlink::detect_shimlink_invocation() {
         let args: Vec<String> = std::env::args().skip(1).collect();
         return shimlink::shimlink_exec(&cmd_name, &args);
+    }
+
+    // Host-exec dispatch: exec scripts for host commands route through here.
+    // `bulker host-exec /path/to/binary [args...]` replaces bulker with the binary.
+    //
+    // Security note: this is intentionally not guarded. It runs as the current user
+    // with no privilege escalation. The user can already run any binary directly;
+    // this subcommand exists only so shimlink scripts can dispatch host_commands
+    // through the bulker binary. It is hidden from `--help` since it is an internal
+    // implementation detail, not a user-facing command.
+    if std::env::args().nth(1).as_deref() == Some("host-exec") {
+        let Some(binary) = std::env::args().nth(2) else {
+            eprintln!("Usage: bulker host-exec <path> [args...]");
+            std::process::exit(1);
+        };
+        let args: Vec<String> = std::env::args().skip(3).collect();
+        let err = std::process::Command::new(&binary).args(&args).exec();
+        eprintln!("Failed to exec {}: {}", binary, err);
+        std::process::exit(1);
     }
 
     let app = build_parser();

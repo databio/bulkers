@@ -154,15 +154,10 @@ fn render_real_shim(
     is_apptainer: bool,
 ) -> Result<String> {
     if is_apptainer {
-        use crate::manifest::parse_docker_image_path;
-        let (img_ns, img_name, _img_tag) = parse_docker_image_path(&pkg.docker_image);
-        let apptainer_image = format!("{}-{}.sif", img_ns, img_name);
-        let apptainer_fullpath = config
-            .bulker
-            .apptainer_image_folder
-            .as_deref()
-            .map(|f| format!("{}/{}", f, apptainer_image))
-            .unwrap_or_else(|| apptainer_image.clone());
+        let (apptainer_image, apptainer_fullpath) = crate::manifest::apptainer_image_paths(
+            &pkg.docker_image,
+            config.bulker.apptainer_image_folder.as_deref(),
+        );
 
         templates::render_template_apptainer(
             exe_template,

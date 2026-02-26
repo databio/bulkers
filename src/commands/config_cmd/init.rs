@@ -53,18 +53,7 @@ pub fn run(matches: &ArgMatches) -> Result<()> {
     if let Some(e) = matches.get_one::<String>("engine") {
         config.bulker.container_engine = e.clone();
         config.bulker.engine_path = resolve_engine_path(e);
-        match e.as_str() {
-            "apptainer" => {
-                config.bulker.executable_template = "apptainer_executable.tera".to_string();
-                config.bulker.shell_template = "apptainer_shell.tera".to_string();
-                config.bulker.build_template = "apptainer_build.tera".to_string();
-            }
-            _ => {
-                config.bulker.executable_template = "docker_executable.tera".to_string();
-                config.bulker.shell_template = "docker_shell.tera".to_string();
-                config.bulker.build_template = "docker_build.tera".to_string();
-            }
-        }
+        // Engine-specific configuration is determined at runtime from container_engine
     } else if detect_engine().is_none() {
         bail!("No container engine found. Install docker or apptainer, or specify with --engine.");
     }

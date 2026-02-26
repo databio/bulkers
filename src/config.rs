@@ -26,12 +26,6 @@ pub struct BulkerSettings {
     pub shell_path: String,
     #[serde(default = "default_shell_rc")]
     pub shell_rc: String,
-    #[serde(default = "default_executable_template")]
-    pub executable_template: String, // Legacy: not read at runtime. See templates.rs.
-    #[serde(default = "default_shell_template")]
-    pub shell_template: String,      // Legacy: not read at runtime. See templates.rs.
-    #[serde(default = "default_build_template")]
-    pub build_template: String,      // Legacy: not read at runtime. See templates.rs.
     #[serde(default = "default_rcfile")]
     pub rcfile: String,
     #[serde(default = "default_rcfile_strict")]
@@ -45,7 +39,7 @@ pub struct BulkerSettings {
     #[serde(default = "default_system_volumes")]
     pub system_volumes: bool,
     #[serde(default)]
-    pub tool_args: Option<serde_yaml::Value>,
+    pub tool_args: Option<serde_yml::Value>,
     #[serde(default)]
     pub shell_prompt: Option<String>,
     #[serde(default)]
@@ -72,18 +66,6 @@ fn default_shell_path() -> String {
 
 fn default_shell_rc() -> String {
     "$HOME/.bashrc".to_string()
-}
-
-fn default_executable_template() -> String {
-    "docker_executable.tera".to_string()
-}
-
-fn default_shell_template() -> String {
-    "docker_shell.tera".to_string()
-}
-
-fn default_build_template() -> String {
-    "docker_build.tera".to_string()
 }
 
 fn default_rcfile() -> String {
@@ -114,7 +96,7 @@ impl BulkerConfig {
     pub fn from_file(path: &Path) -> Result<Self> {
         let contents = std::fs::read_to_string(path)
             .with_context(|| format!("Failed to read config: {}", path.display()))?;
-        let mut config: BulkerConfig = serde_yaml::from_str(&contents)
+        let mut config: BulkerConfig = serde_yml::from_str(&contents)
             .with_context(|| format!("Failed to parse config: {}", path.display()))?;
 
         // Expand env vars in key paths
@@ -131,7 +113,7 @@ impl BulkerConfig {
     }
 
     pub fn write(&self, path: &Path) -> Result<()> {
-        let yaml = serde_yaml::to_string(self)
+        let yaml = serde_yml::to_string(self)
             .context("Failed to serialize config")?;
         std::fs::write(path, &yaml)
             .with_context(|| format!("Failed to write config: {}", path.display()))?;
@@ -170,30 +152,49 @@ impl BulkerConfig {
     }
 }
 
+#[cfg(test)]
+impl BulkerConfig {
+    /// Build a minimal BulkerConfig for tests. Avoids auto-detection of
+    /// container engine so tests are deterministic.
+    pub fn test_default() -> Self {
+        BulkerConfig {
+            bulker: BulkerSettings {
+                container_engine: "docker".to_string(),
+                default_namespace: "bulker".to_string(),
+                registry_url: "http://hub.bulker.io/".to_string(),
+                shell_path: "/bin/bash".to_string(),
+                shell_rc: "$HOME/.bashrc".to_string(),
+                rcfile: "start.sh".to_string(),
+                rcfile_strict: "start_strict.sh".to_string(),
+                volumes: vec!["$HOME".to_string()],
+                envvars: vec!["DISPLAY".to_string()],
+                host_network: true,
+                system_volumes: true,
+                tool_args: None,
+                shell_prompt: None,
+                apptainer_image_folder: None,
+                engine_path: None,
+            },
+        }
+    }
+
+    /// Like `test_default()` but with a custom registry URL.
+    pub fn test_with_registry(registry_url: &str) -> Self {
+        let mut config = Self::test_default();
+        config.bulker.registry_url = registry_url.to_string();
+        config
+    }
+}
+
 impl Default for BulkerSettings {
     fn default() -> Self {
         let engine = default_container_engine();
-        let (exe_tpl, shell_tpl, build_tpl) = match engine.as_str() {
-            "apptainer" => (
-                "apptainer_executable.tera".to_string(),
-                "apptainer_shell.tera".to_string(),
-                "apptainer_build.tera".to_string(),
-            ),
-            _ => (
-                default_executable_template(),
-                default_shell_template(),
-                default_build_template(),
-            ),
-        };
         BulkerSettings {
             container_engine: engine.clone(),
             default_namespace: default_namespace(),
             registry_url: default_registry_url(),
             shell_path: default_shell_path(),
             shell_rc: default_shell_rc(),
-            executable_template: exe_tpl,
-            shell_template: shell_tpl,
-            build_template: build_tpl,
             rcfile: default_rcfile(),
             rcfile_strict: default_rcfile_strict(),
             volumes: default_volumes(),
@@ -311,7 +312,7 @@ pub fn cache_config_to_disk(config: &BulkerConfig, config_path: &Path) -> Result
     templates::write_templates_to_dir(&templates_dir)?;
 
     // Serialize config with header comment
-    let yaml = serde_yaml::to_string(config)
+    let yaml = serde_yml::to_string(config)
         .context("Failed to serialize config")?;
     let contents = format!("# Auto-generated by bulker. Edit to customize.\n{}", yaml);
     std::fs::write(config_path, &contents)
@@ -374,7 +375,7 @@ pub fn expand_path(s: &str) -> String {
 }
 
 /// Make a path absolute, resolving relative to `rel_dir` if provided.
-#[allow(dead_code)]
+#[cfg(test)]
 pub fn mkabs(path: &str, rel_dir: Option<&Path>) -> PathBuf {
     let expanded = expand_path(path);
     let p = PathBuf::from(&expanded);
@@ -392,7 +393,6 @@ pub fn mkabs(path: &str, rel_dir: Option<&Path>) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::fs::PermissionsExt;
 
     #[test]
     fn test_default_host_network() {
@@ -419,11 +419,9 @@ mod tests {
 
     #[test]
     fn test_expand_path_env_var() {
-        // SAFETY: test runs single-threaded
-        unsafe { std::env::set_var("BULKER_TEST_VAR", "testval"); }
+        let _guard = crate::test_util::EnvGuard::set("BULKER_TEST_VAR", "testval");
         assert_eq!(expand_path("${BULKER_TEST_VAR}/bar"), "testval/bar");
         assert_eq!(expand_path("$BULKER_TEST_VAR/bar"), "testval/bar");
-        unsafe { std::env::remove_var("BULKER_TEST_VAR"); }
     }
 
     #[test]

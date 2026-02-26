@@ -1,8 +1,6 @@
 use anyhow::{Context, Result};
 use clap::{Arg, ArgMatches, Command};
-use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
-use std::sync::atomic::Ordering;
 
 use crate::config::load_config;
 use crate::manifest::{load_remote_manifest, parse_registry_paths};
@@ -44,7 +42,7 @@ pub fn run(matches: &ArgMatches) -> Result<()> {
     let (config, _config_path) = load_config(matches.get_one::<String>("config").map(|s| s.as_str()))?;
 
     let registry_paths = matches.get_one::<String>("crate_registry_paths").unwrap();
-    let cratelist = parse_registry_paths(registry_paths, &config.bulker.default_namespace);
+    let cratelist = parse_registry_paths(registry_paths, &config.bulker.default_namespace)?;
 
     let outputs_json = matches.get_one::<String>("outputs_json").unwrap();
     let outputs_path = PathBuf::from(outputs_json);
@@ -103,36 +101,12 @@ pub fn run(matches: &ArgMatches) -> Result<()> {
         quoted_args.join(" ")
     );
 
-    // Set up signal forwarding
-    process::setup_signal_forwarding();
-
-    // Spawn child in a new session
-    let child = unsafe {
-        std::process::Command::new("/bin/sh")
-            .arg("-c")
-            .arg(&merged_command)
-            .pre_exec(|| {
-                nix::unistd::setsid()
-                    .map_err(|e| std::io::Error::from_raw_os_error(e as i32))?;
-                Ok(())
-            })
-            .spawn()
-            .context("Failed to spawn recording child process")?
-    };
-
-    let child_pid = child.id() as i32;
-    process::CHILD_PID.store(child_pid, Ordering::SeqCst);
-
-    // Wait for child
-    let mut child = child;
-    let status = child
-        .wait()
-        .context("Failed to wait on recording child process")?;
+    let exit_code = process::spawn_shell_and_wait(&merged_command)?;
 
     log::info!(
         "Recording complete. Outputs written to: {}",
         outputs_abs.display()
     );
 
-    std::process::exit(status.code().unwrap_or(1));
+    std::process::exit(exit_code);
 }

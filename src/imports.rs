@@ -9,6 +9,7 @@ use std::collections::HashSet;
 
 use crate::config::BulkerConfig;
 use crate::manifest::{CrateVars, parse_registry_path};
+use crate::manifest_cache::MAX_IMPORT_DEPTH;
 
 /// Resolve all CrateVars (including imports) for a list of crates.
 /// Returns a flat list of all CrateVars in dependency order.
@@ -20,7 +21,7 @@ pub fn resolve_cratevars_with_imports(
     let mut visited = HashSet::new();
 
     for cv in cratelist {
-        resolve_crate_vars(config, cv, &mut all_vars, &mut visited)?;
+        resolve_crate_vars(config, cv, &mut all_vars, &mut visited, 0)?;
     }
 
     Ok(all_vars)
@@ -33,7 +34,16 @@ fn resolve_crate_vars(
     cratevars: &CrateVars,
     vars: &mut Vec<CrateVars>,
     visited: &mut HashSet<String>,
+    depth: usize,
 ) -> Result<()> {
+    if depth >= MAX_IMPORT_DEPTH {
+        anyhow::bail!(
+            "Import depth exceeded {} for crate '{}'. Check for excessively deep import chains.",
+            MAX_IMPORT_DEPTH,
+            cratevars.display_name(),
+        );
+    }
+
     let key = cratevars.display_name();
     if visited.contains(&key) {
         return Ok(());
@@ -54,8 +64,8 @@ fn resolve_crate_vars(
     });
 
     for import_path in &manifest.manifest.imports {
-        let import_cv = parse_registry_path(import_path, &config.bulker.default_namespace);
-        resolve_crate_vars(config, &import_cv, vars, visited)?;
+        let import_cv = parse_registry_path(import_path, &config.bulker.default_namespace)?;
+        resolve_crate_vars(config, &import_cv, vars, visited, depth + 1)?;
     }
     Ok(())
 }
@@ -63,37 +73,12 @@ fn resolve_crate_vars(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::BulkerConfig;
     use crate::manifest::{Manifest, ManifestInner, PackageCommand};
-
-    /// Helper to build a minimal BulkerConfig for tests.
-    fn make_test_config() -> BulkerConfig {
-        BulkerConfig {
-            bulker: crate::config::BulkerSettings {
-                container_engine: "docker".to_string(),
-                default_namespace: "bulker".to_string(),
-                registry_url: "http://hub.bulker.io/".to_string(),
-                shell_path: "/bin/bash".to_string(),
-                shell_rc: "$HOME/.bashrc".to_string(),
-                executable_template: "docker_executable.tera".to_string(),
-                shell_template: "docker_shell.tera".to_string(),
-                build_template: "docker_build.tera".to_string(),
-                rcfile: "start.sh".to_string(),
-                rcfile_strict: "start_strict.sh".to_string(),
-                volumes: vec!["$HOME".to_string()],
-                envvars: vec!["DISPLAY".to_string()],
-                host_network: true,
-                system_volumes: true,
-                tool_args: None,
-                shell_prompt: None,
-                apptainer_image_folder: None,
-                engine_path: None,
-            },
-        }
-    }
 
     #[test]
     fn test_resolve_missing_crate_gives_clear_error() {
-        let config = make_test_config();
+        let config = BulkerConfig::test_default();
         let cv = CrateVars {
             namespace: "bulker".to_string(),
             crate_name: "nonexistent_xyz_test".to_string(),
@@ -109,10 +94,9 @@ mod tests {
     fn test_resolve_single_crate_from_cache() {
         // Set up temp XDG dir for test isolation
         let tmpdir = tempfile::tempdir().unwrap();
-        let old_val = std::env::var("XDG_CONFIG_HOME").ok();
-        unsafe { std::env::set_var("XDG_CONFIG_HOME", tmpdir.path()); }
+        let _guard = crate::test_util::EnvGuard::set("XDG_CONFIG_HOME", tmpdir.path());
 
-        let config = make_test_config();
+        let config = BulkerConfig::test_default();
         let cv = CrateVars {
             namespace: "test_imports".to_string(),
             crate_name: "demo".to_string(),
@@ -127,17 +111,7 @@ mod tests {
                 commands: vec![PackageCommand {
                     command: "cowsay".to_string(),
                     docker_image: "nsheff/cowsay:latest".to_string(),
-                    docker_command: None,
-                    docker_args: None,
-                    dockerargs: None,
-                    apptainer_args: None,
-                    apptainer_command: None,
-                    volumes: vec![],
-                    envvars: vec![],
-                    no_user: false,
-                    no_network: false,
-                    no_default_volumes: false,
-                    workdir: None,
+                    ..Default::default()
                 }],
                 host_commands: vec![],
                 imports: vec![],
@@ -149,10 +123,85 @@ mod tests {
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].crate_name, "demo");
 
-        // Restore env
-        match old_val {
-            Some(v) => unsafe { std::env::set_var("XDG_CONFIG_HOME", v); },
-            None => unsafe { std::env::remove_var("XDG_CONFIG_HOME"); },
+
+    }
+
+    use crate::test_util::make_manifest_with_imports;
+
+    #[test]
+    fn test_resolve_cycle_detection() {
+        // Set up isolated cache
+        let tmpdir = tempfile::tempdir().unwrap();
+        let _guard = crate::test_util::EnvGuard::set("XDG_CONFIG_HOME", tmpdir.path());
+
+        let config = BulkerConfig::test_default();
+
+        // Crate A imports B, crate B imports A -- a cycle
+        let cv_a = CrateVars {
+            namespace: "cycle_imports".to_string(),
+            crate_name: "alpha".to_string(),
+            tag: "default".to_string(),
+        };
+        let cv_b = CrateVars {
+            namespace: "cycle_imports".to_string(),
+            crate_name: "beta".to_string(),
+            tag: "default".to_string(),
+        };
+
+        let manifest_a = make_manifest_with_imports("alpha", vec!["cycle_imports/beta:default".to_string()]);
+        let manifest_b = make_manifest_with_imports("beta", vec!["cycle_imports/alpha:default".to_string()]);
+
+        crate::manifest_cache::save_to_cache(&cv_a, &manifest_a).unwrap();
+        crate::manifest_cache::save_to_cache(&cv_b, &manifest_b).unwrap();
+
+        // Should complete without infinite recursion; cycle broken by visited set
+        let result = resolve_cratevars_with_imports(&config, &[cv_a]);
+        assert!(result.is_ok(), "Cycle detection failed: {:?}", result.err());
+        let vars = result.unwrap();
+        // Both crates should appear exactly once
+        assert_eq!(vars.len(), 2);
+        assert!(vars.iter().any(|v| v.crate_name == "alpha"));
+        assert!(vars.iter().any(|v| v.crate_name == "beta"));
+
+
+    }
+
+    #[test]
+    fn test_resolve_depth_limit() {
+        // Set up isolated cache
+        let tmpdir = tempfile::tempdir().unwrap();
+        let _guard = crate::test_util::EnvGuard::set("XDG_CONFIG_HOME", tmpdir.path());
+
+        let config = BulkerConfig::test_default();
+
+        // Create a chain that exceeds MAX_IMPORT_DEPTH
+        let depth = MAX_IMPORT_DEPTH + 1;
+        for i in 0..depth {
+            let imports = if i + 1 < depth {
+                vec![format!("depth_imports/chain_{}:default", i + 1)]
+            } else {
+                vec![]
+            };
+            let cv = CrateVars {
+                namespace: "depth_imports".to_string(),
+                crate_name: format!("chain_{}", i),
+                tag: "default".to_string(),
+            };
+            let manifest = make_manifest_with_imports(&format!("chain_{}", i), imports);
+            crate::manifest_cache::save_to_cache(&cv, &manifest).unwrap();
         }
+
+        let cv_start = CrateVars {
+            namespace: "depth_imports".to_string(),
+            crate_name: "chain_0".to_string(),
+            tag: "default".to_string(),
+        };
+
+        let result = resolve_cratevars_with_imports(&config, &[cv_start]);
+        assert!(result.is_err(), "Should have failed with depth limit error");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("Import depth exceeded"), "Error message should mention depth: {}", err_msg);
+
+
     }
 }

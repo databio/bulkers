@@ -64,20 +64,12 @@ fn build_context(
 
     // Merge volumes: config-level + command-level
     let mut volumes = config.bulker.volumes.clone();
-    for v in &pkg.volumes {
-        if !volumes.contains(v) {
-            volumes.push(v.clone());
-        }
-    }
+    crate::manifest::merge_lists(&mut volumes, &pkg.volumes);
     ctx.insert("volumes", &volumes);
 
     // Merge envvars: config-level + command-level
     let mut envvars = config.bulker.envvars.clone();
-    for e in &pkg.envvars {
-        if !envvars.contains(e) {
-            envvars.push(e.clone());
-        }
-    }
+    crate::manifest::merge_lists(&mut envvars, &pkg.envvars);
     ctx.insert("envvars", &envvars);
 
     ctx.insert("engine_path", config.engine_path());
@@ -91,23 +83,7 @@ fn build_context(
     ctx.insert("workdir", &pkg.workdir.as_deref().unwrap_or(""));
 
     // Merge docker_args from multiple sources
-    let mut all_docker_args = String::new();
-    if let Some(ref da) = pkg.dockerargs {
-        all_docker_args.push_str(da);
-    }
-    if let Some(ref da) = pkg.docker_args {
-        if !all_docker_args.is_empty() {
-            all_docker_args.push(' ');
-        }
-        all_docker_args.push_str(da);
-    }
-    if !extra_docker_args.is_empty() {
-        if !all_docker_args.is_empty() {
-            all_docker_args.push(' ');
-        }
-        all_docker_args.push_str(extra_docker_args);
-    }
-    // Set dockerargs and docker_args to the merged value
+    let all_docker_args = pkg.merged_docker_args(&[extra_docker_args]);
     if all_docker_args.is_empty() {
         ctx.insert("dockerargs", &"");
         ctx.insert("docker_args", &"");

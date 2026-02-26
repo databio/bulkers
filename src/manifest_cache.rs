@@ -3,12 +3,17 @@
 //! Decoupled from the config `crates` map — activate auto-fetches on demand.
 
 use anyhow::{Context, Result};
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 use crate::config::BulkerConfig;
 use crate::digest;
-use crate::manifest::{CrateVars, Manifest, load_remote_manifest, parse_docker_image_path, parse_registry_path};
+use crate::manifest::{CrateVars, Manifest, load_remote_manifest, parse_registry_path};
 use crate::templates;
+
+/// Maximum recursion depth for import resolution. Prevents stack overflow
+/// from pathologically deep (but non-cyclic) import chains.
+pub const MAX_IMPORT_DEPTH: usize = 32;
 
 /// Get the base cache directory for manifests.
 pub fn cache_base_dir() -> PathBuf {
@@ -72,7 +77,7 @@ pub fn load_cached(cv: &CrateVars) -> Result<Option<Manifest>> {
     }
     let contents = std::fs::read_to_string(&path)
         .with_context(|| format!("Failed to read cached manifest: {}", path.display()))?;
-    let manifest: Manifest = serde_yaml::from_str(&contents)
+    let manifest: Manifest = serde_yml::from_str(&contents)
         .with_context(|| format!("Failed to parse cached manifest: {}", path.display()))?;
     Ok(Some(manifest))
 }
@@ -84,7 +89,7 @@ pub fn save_to_cache(cv: &CrateVars, manifest: &Manifest) -> Result<()> {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("Failed to create cache dir: {}", parent.display()))?;
     }
-    let yaml = serde_yaml::to_string(manifest)
+    let yaml = serde_yml::to_string(manifest)
         .context("Failed to serialize manifest")?;
     std::fs::write(&path, &yaml)
         .with_context(|| format!("Failed to write manifest cache: {}", path.display()))?;
@@ -112,15 +117,33 @@ pub fn ensure_cached(config: &BulkerConfig, cv: &CrateVars, force: bool) -> Resu
 }
 
 /// Recursively ensure a manifest and all its imports are cached.
+/// Uses a visited set to detect import cycles and a depth limit to prevent
+/// stack overflow from pathologically deep (but non-cyclic) import chains.
 pub fn ensure_cached_with_imports(
     config: &BulkerConfig,
     cv: &CrateVars,
     force: bool,
+    visited: &mut HashSet<String>,
+    depth: usize,
 ) -> Result<Manifest> {
+    let key = cv.display_name();
+    if visited.contains(&key) {
+        log::debug!("Skipping already-visited import: {}", key);
+        return ensure_cached(config, cv, force);
+    }
+    if depth >= MAX_IMPORT_DEPTH {
+        anyhow::bail!(
+            "Import depth exceeded {} for crate '{}'. Check for excessively deep import chains.",
+            MAX_IMPORT_DEPTH,
+            key,
+        );
+    }
+    visited.insert(key);
+
     let manifest = ensure_cached(config, cv, force)?;
     for import_path in &manifest.manifest.imports {
-        let import_cv = parse_registry_path(import_path, &config.bulker.default_namespace);
-        ensure_cached_with_imports(config, &import_cv, force)?;
+        let import_cv = parse_registry_path(import_path, &config.bulker.default_namespace)?;
+        ensure_cached_with_imports(config, &import_cv, force, visited, depth + 1)?;
     }
     Ok(manifest)
 }
@@ -188,14 +211,10 @@ pub fn pull_images(config: &BulkerConfig, manifest: &Manifest) -> Result<()> {
         let extra_args = config.host_tool_specific_args(pkg, "docker_args");
 
         let build_content = if is_apptainer {
-            let (img_ns, img_name, _img_tag) = parse_docker_image_path(&pkg.docker_image);
-            let apptainer_image = format!("{}-{}.sif", img_ns, img_name);
-            let apptainer_fullpath = config
-                .bulker
-                .apptainer_image_folder
-                .as_deref()
-                .map(|f| format!("{}/{}", f, apptainer_image))
-                .unwrap_or_else(|| apptainer_image.clone());
+            let (apptainer_image, apptainer_fullpath) = crate::manifest::apptainer_image_paths(
+                &pkg.docker_image,
+                config.bulker.apptainer_image_folder.as_deref(),
+            );
 
             templates::render_template_apptainer(
                 build_template,
@@ -226,6 +245,7 @@ pub fn pull_images(config: &BulkerConfig, manifest: &Manifest) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::BulkerConfig;
     use crate::manifest::{ManifestInner, Manifest};
 
     #[test]
@@ -250,8 +270,7 @@ mod tests {
     fn test_save_and_load_cached_roundtrip() {
         // Use a temporary directory as cache base by setting XDG_CONFIG_HOME
         let tmpdir = tempfile::tempdir().unwrap();
-        let old_val = std::env::var("XDG_CONFIG_HOME").ok();
-        unsafe { std::env::set_var("XDG_CONFIG_HOME", tmpdir.path()); }
+        let _guard = crate::test_util::EnvGuard::set("XDG_CONFIG_HOME", tmpdir.path());
 
         let cv = CrateVars {
             namespace: "test".to_string(),
@@ -266,17 +285,7 @@ mod tests {
                 commands: vec![crate::manifest::PackageCommand {
                     command: "cowsay".to_string(),
                     docker_image: "nsheff/cowsay:latest".to_string(),
-                    docker_command: None,
-                    docker_args: None,
-                    dockerargs: None,
-                    apptainer_args: None,
-                    apptainer_command: None,
-                    volumes: vec![],
-                    envvars: vec![],
-                    no_user: false,
-                    no_network: false,
-                    no_default_volumes: false,
-                    workdir: None,
+                    ..Default::default()
                 }],
                 host_commands: vec!["ls".to_string()],
                 imports: vec![],
@@ -291,11 +300,6 @@ mod tests {
         assert_eq!(loaded.manifest.commands[0].command, "cowsay");
         assert_eq!(loaded.manifest.host_commands, vec!["ls"]);
 
-        // Restore env
-        match old_val {
-            Some(v) => unsafe { std::env::set_var("XDG_CONFIG_HOME", v); },
-            None => unsafe { std::env::remove_var("XDG_CONFIG_HOME"); },
-        }
     }
 
     #[test]
@@ -326,5 +330,85 @@ mod tests {
         // Should not error on removing something that doesn't exist
         let result = remove_cached(&cv);
         assert!(result.is_ok());
+    }
+
+
+
+    use crate::test_util::make_manifest_with_imports;
+
+    #[test]
+    fn test_ensure_cached_with_imports_cycle_detection() {
+        // Set up isolated cache
+        let tmpdir = tempfile::tempdir().unwrap();
+        let _guard = crate::test_util::EnvGuard::set("XDG_CONFIG_HOME", tmpdir.path());
+
+        let config = BulkerConfig::test_default();
+
+        // Crate A imports B, crate B imports A -- a cycle
+        let cv_a = CrateVars {
+            namespace: "cycle_test".to_string(),
+            crate_name: "crate_a".to_string(),
+            tag: "default".to_string(),
+        };
+        let cv_b = CrateVars {
+            namespace: "cycle_test".to_string(),
+            crate_name: "crate_b".to_string(),
+            tag: "default".to_string(),
+        };
+
+        let manifest_a = make_manifest_with_imports("crate_a", vec!["cycle_test/crate_b:default".to_string()]);
+        let manifest_b = make_manifest_with_imports("crate_b", vec!["cycle_test/crate_a:default".to_string()]);
+
+        save_to_cache(&cv_a, &manifest_a).unwrap();
+        save_to_cache(&cv_b, &manifest_b).unwrap();
+
+        // This should NOT stack overflow. It should complete successfully
+        // (cycle broken by visited set).
+        let mut visited = std::collections::HashSet::new();
+        let result = ensure_cached_with_imports(&config, &cv_a, false, &mut visited, 0);
+        assert!(result.is_ok(), "Cycle detection failed: {:?}", result.err());
+
+
+    }
+
+    #[test]
+    fn test_ensure_cached_with_imports_depth_limit() {
+        // Set up isolated cache
+        let tmpdir = tempfile::tempdir().unwrap();
+        let _guard = crate::test_util::EnvGuard::set("XDG_CONFIG_HOME", tmpdir.path());
+
+        let config = BulkerConfig::test_default();
+
+        // Create a chain that exceeds MAX_IMPORT_DEPTH:
+        // chain_0 (depth 0) -> chain_1 (depth 1) -> ... -> chain_MAX (depth MAX)
+        let depth = MAX_IMPORT_DEPTH + 1;
+        for i in 0..depth {
+            let imports = if i + 1 < depth {
+                vec![format!("depth_test/chain_{}:default", i + 1)]
+            } else {
+                vec![]
+            };
+            let cv = CrateVars {
+                namespace: "depth_test".to_string(),
+                crate_name: format!("chain_{}", i),
+                tag: "default".to_string(),
+            };
+            let manifest = make_manifest_with_imports(&format!("chain_{}", i), imports);
+            save_to_cache(&cv, &manifest).unwrap();
+        }
+
+        let cv_start = CrateVars {
+            namespace: "depth_test".to_string(),
+            crate_name: "chain_0".to_string(),
+            tag: "default".to_string(),
+        };
+
+        let mut visited = std::collections::HashSet::new();
+        let result = ensure_cached_with_imports(&config, &cv_start, false, &mut visited, 0);
+        assert!(result.is_err(), "Should have failed with depth limit error");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("Import depth exceeded"), "Error message should mention depth: {}", err_msg);
+
+
     }
 }

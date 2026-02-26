@@ -173,7 +173,7 @@ fn test_activate_echo_mode() {
     assert!(stdout.contains("export BULKERPATH="), "missing BULKERPATH export: {}", stdout);
     assert!(stdout.contains("export PATH="), "missing PATH export: {}", stdout);
     // With shimlinks, PATH contains /tmp/bulker_* shimlink dir
-    assert!(stdout.contains("/tmp/bulker_"), "PATH doesn't contain shimlink dir: {}", stdout);
+    assert!(stdout.contains("bulker_"), "PATH doesn't contain shimlink dir: {}", stdout);
 }
 
 #[test]
@@ -197,7 +197,7 @@ fn test_activate_local_manifest() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "activate local manifest failed: {}\n{}", stderr, stdout);
     assert!(stdout.contains("export PATH="), "missing PATH export: {}", stdout);
-    assert!(stdout.contains("/tmp/bulker_"), "PATH doesn't contain shimlink dir: {}", stdout);
+    assert!(stdout.contains("bulker_"), "PATH doesn't contain shimlink dir: {}", stdout);
 }
 
 #[test]
@@ -390,4 +390,43 @@ fn test_config_add_rejects_scalar_key() {
     assert!(!output.status.success(), "add to scalar key should fail");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("not a list field"), "should mention not a list field: {}", stderr);
+}
+
+#[test]
+fn test_host_exec_passthrough() {
+    let output = Command::new(bulker_bin())
+        .args(["host-exec", "/bin/echo", "hello", "world"])
+        .output()
+        .expect("failed to run host-exec");
+
+    assert!(output.status.success(), "host-exec should succeed: {}",
+        String::from_utf8_lossy(&output.stderr));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(stdout.trim(), "hello world");
+}
+
+#[test]
+fn test_activate_strict_echo_no_host_path() {
+    let tmp = TempDir::new().unwrap();
+    let config_path = init_config(&tmp);
+    install_test_crate(&tmp, &config_path);
+
+    // Activate with --strict --echo
+    let output = bulker_cmd(tmp.path())
+        .args([
+            "activate",
+            "-c", config_path.to_str().unwrap(),
+            "--echo",
+            "--strict",
+            "local/test_manifest:default",
+        ])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "strict activate failed: {}\n{}", stderr, stdout);
+    // In strict mode, PATH should only be the shimdir (no original PATH appended)
+    let path_line = stdout.lines().find(|l| l.starts_with("export PATH=")).unwrap();
+    assert!(!path_line.contains(":/"), "strict PATH should not contain original PATH segments: {}", path_line);
 }
