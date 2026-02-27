@@ -65,6 +65,13 @@ fn build_context(
     // Merge volumes: config-level + command-level
     let mut volumes = config.bulker.volumes.clone();
     crate::manifest::merge_lists(&mut volumes, &pkg.volumes);
+
+    // Auto-mount temp directory ($TMPDIR or /tmp)
+    let tmpdir = crate::shimlink::tmpdir_volume();
+    if !volumes.contains(&tmpdir) {
+        volumes.push(tmpdir);
+    }
+
     ctx.insert("volumes", &volumes);
 
     // Merge envvars: config-level + command-level

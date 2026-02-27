@@ -3,7 +3,7 @@ use clap::{Arg, ArgAction, ArgMatches, Command};
 
 use crate::config::load_config;
 use crate::digest;
-use crate::manifest::{is_local_path, load_local_manifest, parse_registry_paths, CrateVars, Manifest};
+use crate::manifest::{is_local_path, is_url, load_local_manifest, load_url_manifest, parse_registry_paths, CrateVars, Manifest};
 use crate::manifest_cache;
 
 pub fn create_cli() -> Command {
@@ -55,7 +55,16 @@ pub fn run(matches: &ArgMatches) -> Result<()> {
     let name_override = matches.get_one::<String>("name").map(|s| s.as_str());
     let no_overwrite = matches.get_flag("no-overwrite");
 
-    if is_local_path(cratefile) {
+    if is_url(cratefile) {
+        // Remote manifest URL
+        let (cv, manifest) = load_url_manifest(cratefile, name_override, &config.bulker.default_namespace)?;
+        manifest_cache::save_to_cache(&cv, &manifest)?;
+        if build {
+            manifest_cache::pull_images(&config, &manifest)?;
+            attempt_image_digest(&cv, &manifest);
+        }
+        println!("Cached: {}", cv.display_name());
+    } else if is_local_path(cratefile) {
         // Local manifest file
         let (cv, manifest) = load_local_manifest(cratefile, name_override, &config.bulker.default_namespace)?;
         manifest_cache::save_to_cache(&cv, &manifest)?;

@@ -153,7 +153,7 @@ pub fn parse_registry_paths(paths: &str, default_namespace: &str) -> Result<Vec<
         .collect()
 }
 
-fn is_url(s: &str) -> bool {
+pub(crate) fn is_url(s: &str) -> bool {
     s.starts_with("http://") || s.starts_with("https://")
 }
 
@@ -205,12 +205,13 @@ pub fn load_remote_manifest(
     Ok((manifest, cratevars))
 }
 
-/// Detect if a crate argument is a local file path (as opposed to a registry path).
+/// Detect if a crate argument is a local file path (as opposed to a registry path or URL).
 pub(crate) fn is_local_path(s: &str) -> bool {
-    s.starts_with('.')
-        || s.starts_with('/')
-        || s.ends_with(".yaml")
-        || s.ends_with(".yml")
+    !is_url(s)
+        && (s.starts_with('.')
+            || s.starts_with('/')
+            || s.ends_with(".yaml")
+            || s.ends_with(".yml"))
 }
 
 /// Load a local manifest file, returning the parsed Manifest and derived CrateVars.
@@ -257,6 +258,47 @@ pub(crate) fn load_local_manifest(
         cv
     } else {
         bail!("Manifest has no 'name' field. Add 'name: namespace/crate' or use --name on the CLI.");
+    };
+
+    Ok((cv, manifest))
+}
+
+/// Load a manifest from a URL, returning the parsed Manifest and derived CrateVars.
+///
+/// Identity resolution follows the same logic as `load_local_manifest`:
+/// 1. `name_override` (from `--name` CLI flag) — always wins
+/// 2. `manifest.name` field — parsed with `parse_registry_path()`
+/// 3. No name — error
+pub(crate) fn load_url_manifest(
+    url: &str,
+    name_override: Option<&str>,
+    default_namespace: &str,
+) -> Result<(CrateVars, Manifest)> {
+    let resp = ureq::get(url)
+        .call()
+        .with_context(|| format!("Failed to fetch manifest from URL: {}", url))?;
+    let contents = resp.into_string()
+        .with_context(|| format!("Failed to read response from: {}", url))?;
+    let manifest: Manifest = serde_yml::from_str(&contents)
+        .with_context(|| format!("Failed to parse manifest YAML from: {}", url))?;
+
+    let cv = if let Some(name) = name_override {
+        parse_registry_path(name, default_namespace)?
+    } else if let Some(ref name) = manifest.manifest.name {
+        if name.trim().is_empty() {
+            bail!("Remote manifest has empty 'name' field. Use --name to override.");
+        }
+        let mut cv = parse_registry_path(name, default_namespace)?;
+        if !name.contains(':') {
+            cv.tag = manifest.manifest.version
+                .as_ref()
+                .filter(|v| !v.trim().is_empty())
+                .map(|v| v.trim().to_string())
+                .unwrap_or_else(|| "default".to_string());
+        }
+        cv
+    } else {
+        bail!("Remote manifest has no 'name' field. Use --name to override.");
     };
 
     Ok((cv, manifest))
@@ -504,6 +546,37 @@ mod tests {
         let result = load_local_manifest(f.path().to_str().unwrap(), None, "bulker");
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("no 'name' field"));
+    }
+
+    // ─── is_url / is_local_path tests ─────────────────────────────────
+
+    #[test]
+    fn test_is_url_https() {
+        assert!(is_url("https://example.com/manifest.yaml"));
+    }
+
+    #[test]
+    fn test_is_url_http() {
+        assert!(is_url("http://hub.bulker.io/bulker/demo.yaml"));
+    }
+
+    #[test]
+    fn test_is_url_not_registry_path() {
+        assert!(!is_url("bulker/demo:default"));
+    }
+
+    #[test]
+    fn test_is_local_path_returns_false_for_urls() {
+        assert!(!is_local_path("https://example.com/manifest.yaml"));
+        assert!(!is_local_path("http://hub.bulker.io/bulker/demo.yaml"));
+    }
+
+    #[test]
+    fn test_is_local_path_returns_true_for_local_files() {
+        assert!(is_local_path("./manifest.yaml"));
+        assert!(is_local_path("/path/to/file.yaml"));
+        assert!(is_local_path("file.yaml"));
+        assert!(is_local_path("./crate.yml"));
     }
 
     #[test]

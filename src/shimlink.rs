@@ -59,6 +59,12 @@ pub fn shimlink_exec(command_name: &str, args: &[String]) -> Result<()> {
     crate::manifest::merge_lists(&mut volumes, &pkg.volumes);
     crate::manifest::merge_lists(&mut volumes, &auto_mount_dirs);
 
+    // Auto-mount temp directory ($TMPDIR or /tmp)
+    let tmpdir = tmpdir_volume();
+    if !volumes.contains(&tmpdir) {
+        volumes.push(tmpdir);
+    }
+
     // 5. Collect envvars based on mode
     let strict_env = std::env::var("BULKER_STRICT_ENV").is_ok();
     let envvars = if strict_env {
@@ -470,8 +476,20 @@ pub fn create_shimlink_dir(manifest: &Manifest, dir: &Path) -> Result<()> {
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
+/// Returns the host temp directory path to auto-mount.
+/// Uses $TMPDIR if set, otherwise falls back to "/tmp".
+pub(crate) fn tmpdir_volume() -> String {
+    std::env::var("TMPDIR")
+        .unwrap_or_else(|_| "/tmp".to_string())
+}
+
 /// Env vars managed by Docker that should not be passed from the host.
 const DOCKER_MANAGED_VARS: &[&str] = &["PATH", "HOME", "HOSTNAME"];
+
+/// Locale vars that should not be forwarded — containers typically lack the
+/// matching locale files, which causes spurious warnings (e.g. from Perl).
+const LOCALE_VARS: &[&str] = &["LANG", "LANGUAGE", "LC_ALL", "LC_COLLATE", "LC_CTYPE",
+    "LC_MESSAGES", "LC_MONETARY", "LC_NUMERIC", "LC_TIME"];
 
 /// Collect all host environment variable names, excluding Docker-managed vars
 /// and bulker internal vars.
@@ -479,6 +497,7 @@ fn collect_host_envvars() -> Vec<String> {
     std::env::vars()
         .map(|(k, _)| k)
         .filter(|k| !DOCKER_MANAGED_VARS.contains(&k.as_str()))
+        .filter(|k| !LOCALE_VARS.contains(&k.as_str()))
         .filter(|k| !k.starts_with("BULKER"))
         .collect()
 }
@@ -1159,6 +1178,53 @@ mod tests {
         let cmd = build_apptainer_command(&config, &pkg, &[], &[], &[], false, "apptainer");
         assert!(!cmd.contains(&"--cleanenv".to_string()), "normal mode should NOT have --cleanenv: {:?}", cmd);
         assert!(!cmd.iter().any(|a| a.starts_with("--env")), "normal mode should NOT have explicit --env flags: {:?}", cmd);
+    }
+
+    // ─── tmpdir auto-mount tests ────────────────────────────────────────
+
+    #[test]
+    fn test_tmpdir_volume_with_tmpdir_set() {
+        let _guard = crate::test_util::EnvGuard::set("TMPDIR", "/scratch/tmp");
+        assert_eq!(tmpdir_volume(), "/scratch/tmp");
+    }
+
+    #[test]
+    fn test_tmpdir_volume_with_tmpdir_unset() {
+        let _guard = crate::test_util::EnvGuard::remove("TMPDIR");
+        assert_eq!(tmpdir_volume(), "/tmp");
+    }
+
+    #[test]
+    fn test_tmpdir_appears_in_docker_command() {
+        let _guard = crate::test_util::EnvGuard::remove("TMPDIR");
+        let config = BulkerConfig::test_default();
+        let pkg = PackageCommand {
+            command: "tool".to_string(),
+            docker_image: "img:latest".to_string(),
+            ..Default::default()
+        };
+        let volumes = vec!["/tmp".to_string()];
+        let cmd = build_docker_command(&config, &pkg, &volumes, &[], "", &[], false, "docker");
+        let cmd_str = cmd.join(" ");
+        assert!(cmd_str.contains("--volume /tmp:/tmp"), "tmpdir should be mounted: {}", cmd_str);
+    }
+
+    #[test]
+    fn test_tmpdir_appears_in_apptainer_command() {
+        let _guard = crate::test_util::EnvGuard::remove("TMPDIR");
+        // SAFETY: already hold ENV_MUTEX via _guard above
+        unsafe { std::env::remove_var("BULKER_STRICT_ENV"); }
+        let mut config = BulkerConfig::test_default();
+        config.bulker.apptainer_image_folder = Some("/tmp/sif".to_string());
+        let pkg = PackageCommand {
+            command: "tool".to_string(),
+            docker_image: "img:latest".to_string(),
+            ..Default::default()
+        };
+        let volumes = vec!["/tmp".to_string()];
+        let cmd = build_apptainer_command(&config, &pkg, &volumes, &[], &[], false, "apptainer");
+        let cmd_str = cmd.join(" ");
+        assert!(cmd_str.contains("-B /tmp:/tmp"), "tmpdir should be bound in apptainer: {}", cmd_str);
     }
 
     #[test]

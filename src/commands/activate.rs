@@ -2,7 +2,7 @@ use anyhow::Result;
 use clap::{Arg, ArgAction, ArgMatches, Command};
 
 use crate::config::load_config;
-use crate::manifest::{is_local_path, load_local_manifest, parse_registry_paths};
+use crate::manifest::{is_local_path, is_url, load_local_manifest, load_url_manifest, parse_registry_paths};
 
 pub fn create_cli() -> Command {
     Command::new("activate")
@@ -21,7 +21,8 @@ CRATE FORMAT:
   namespace/crate:tag    Full path (e.g., databio/pepatac:1.0.13)
   crate                  Uses default namespace \"bulker\", tag \"default\"
   crate1,crate2          Multiple crates
-  ./path/to/file.yaml    Local manifest file")
+  ./path/to/file.yaml    Local manifest file
+  https://url/file.yaml  Remote manifest")
         .arg(
             Arg::new("crate_registry_paths")
                 .required(true)
@@ -84,8 +85,12 @@ pub fn run(matches: &ArgMatches) -> Result<()> {
     let force = matches.get_flag("force");
     let name_override = matches.get_one::<String>("name").map(|s| s.as_str());
 
-    // Detect local file path vs registry path
-    let cratelist = if is_local_path(registry_paths) {
+    // Detect URL, local file path, or registry path
+    let cratelist = if is_url(registry_paths) {
+        let (cv, manifest) = load_url_manifest(registry_paths, name_override, &config.bulker.default_namespace)?;
+        crate::manifest_cache::save_to_cache(&cv, &manifest)?;
+        vec![cv]
+    } else if is_local_path(registry_paths) {
         let (cv, manifest) = load_local_manifest(registry_paths, name_override, &config.bulker.default_namespace)?;
         crate::manifest_cache::save_to_cache(&cv, &manifest)?;
         vec![cv]
