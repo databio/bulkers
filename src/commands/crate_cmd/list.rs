@@ -2,6 +2,7 @@ use anyhow::Result;
 use clap::{ArgAction, ArgMatches, Command};
 use std::collections::BTreeMap;
 
+use crate::manifest::{Manifest};
 use crate::manifest_cache;
 
 pub fn create_cli() -> Command {
@@ -93,65 +94,85 @@ pub fn run(matches: &ArgMatches) -> Result<()> {
         return Ok(());
     }
 
-    // Group by namespace/crate_name -> Vec<(tag, Option<digest>)>
-    let mut grouped: BTreeMap<String, Vec<(String, Option<String>)>> = BTreeMap::new();
-    for (cv, _) in &cached {
+    // Group by namespace/crate_name -> Vec<(tag, version, digest)>
+    let mut grouped: BTreeMap<String, Vec<(String, String, Option<String>)>> = BTreeMap::new();
+    for (cv, manifest_path) in &cached {
         let key = format!("{}/{}", cv.namespace, cv.crate_name);
         let digest = manifest_cache::read_digest_sidecar(cv, "crate-manifest-digest");
-        grouped.entry(key).or_default().push((cv.tag.clone(), digest));
+        let version = std::fs::read_to_string(manifest_path)
+            .ok()
+            .and_then(|contents| serde_yml::from_str::<Manifest>(&contents).ok())
+            .and_then(|m| m.manifest.version)
+            .unwrap_or_default();
+        grouped.entry(key).or_default().push((cv.tag.clone(), version, digest));
     }
 
-    // Calculate column width
+    // Calculate column widths
     let max_crate_width = grouped.keys().map(|k| k.len()).max().unwrap_or(20);
+    let tag_width = 10;
+    let version_width = 10;
+    let digest_width = 12;
 
     println!();
+    println!(
+        "  {:<cw$}  {:<tw$}  {:<vw$}  {:<dw$}",
+        "Crate", "Tag", "Version", "Digest",
+        cw = max_crate_width, tw = tag_width, vw = version_width, dw = digest_width
+    );
+    println!(
+        "  {:<cw$}  {:<tw$}  {:<vw$}  {:<dw$}",
+        "─".repeat(max_crate_width), "─".repeat(tag_width), "─".repeat(version_width), "─".repeat(digest_width),
+        cw = max_crate_width, tw = tag_width, vw = version_width, dw = digest_width
+    );
 
     for (full_name, entries) in grouped {
         // Sort by tag
-        let mut tag_list: Vec<String> = entries.iter().map(|(t, _)| t.clone()).collect();
+        let mut tag_list: Vec<String> = entries.iter().map(|(t, _, _)| t.clone()).collect();
         sort_versions_desc(&mut tag_list);
 
-        // Build a map from tag -> digest for quick lookup
-        let digest_map: std::collections::HashMap<&str, Option<&str>> = entries
+        // Build maps from tag -> version/digest for quick lookup
+        let info_map: std::collections::HashMap<&str, (&str, Option<&str>)> = entries
             .iter()
-            .map(|(t, d)| (t.as_str(), d.as_deref()))
+            .map(|(t, v, d)| (t.as_str(), (v.as_str(), d.as_deref())))
             .collect();
 
         if show_versions {
             let mut first = true;
             for tag in &tag_list {
-                let digest_str = digest_map
-                    .get(tag.as_str())
-                    .and_then(|d| *d)
-                    .map(|d| &d[..12]) // show first 12 chars
-                    .unwrap_or("");
+                let (version, digest) = info_map.get(tag.as_str()).copied().unwrap_or(("", None));
+                let digest_str = digest.map(|d| &d[..12]).unwrap_or("");
+                let version_str = if version.is_empty() { "" } else { version };
                 if first {
-                    println!("  {:<width$}  {:<12}  {}", full_name, tag, digest_str, width = max_crate_width);
+                    println!(
+                        "  {:<cw$}  {:<tw$}  {:<vw$}  {}",
+                        full_name, tag, version_str, digest_str,
+                        cw = max_crate_width, tw = tag_width, vw = version_width
+                    );
                     first = false;
                 } else {
-                    println!("  {:<width$}  {:<12}  {}", "", tag, digest_str, width = max_crate_width);
+                    println!(
+                        "  {:<cw$}  {:<tw$}  {:<vw$}  {}",
+                        "", tag, version_str, digest_str,
+                        cw = max_crate_width, tw = tag_width, vw = version_width
+                    );
                 }
             }
         } else {
             let latest = tag_list.first().map(|s| s.as_str()).unwrap_or("default");
-            let digest_str = digest_map
-                .get(latest)
-                .and_then(|d| *d)
-                .map(|d| &d[..12])
-                .unwrap_or("");
+            let (version, digest) = info_map.get(latest).copied().unwrap_or(("", None));
+            let digest_str = digest.map(|d| &d[..12]).unwrap_or("");
+            let version_str = if version.is_empty() { "" } else { version };
             let extra = tag_list.len().saturating_sub(1);
-            if extra > 0 {
-                println!(
-                    "  {:<width$}  {}  {}  (+{} more)",
-                    full_name,
-                    latest,
-                    digest_str,
-                    extra,
-                    width = max_crate_width
-                );
+            let extra_str = if extra > 0 {
+                format!("  (+{} more tag{})", extra, if extra == 1 { "" } else { "s" })
             } else {
-                println!("  {:<width$}  {}  {}", full_name, latest, digest_str, width = max_crate_width);
-            }
+                String::new()
+            };
+            println!(
+                "  {:<cw$}  {:<tw$}  {:<vw$}  {}{}",
+                full_name, latest, version_str, digest_str, extra_str,
+                cw = max_crate_width, tw = tag_width, vw = version_width
+            );
         }
     }
 
