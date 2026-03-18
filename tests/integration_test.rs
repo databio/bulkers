@@ -404,6 +404,30 @@ fn test_host_exec_passthrough() {
 }
 
 #[test]
+fn test_activate_double_activation_rejected() {
+    let tmp = TempDir::new().unwrap();
+    let config_path = init_config(&tmp);
+    install_test_crate(&tmp, &config_path);
+
+    // Simulate an already-active crate by setting BULKERCRATE
+    let output = bulker_cmd(tmp.path())
+        .env("BULKERCRATE", "bulker/some-crate:1.0.0")
+        .args([
+            "activate",
+            "-c", config_path.to_str().unwrap(),
+            "--echo",
+            "bulker/test-crate:1.0.0",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success(), "double activation should fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("already activated"), "should warn about existing activation: {}", stderr);
+    assert!(stderr.contains("bulker/some-crate:1.0.0"), "should show active crate name: {}", stderr);
+}
+
+#[test]
 fn test_singularity_engine_uses_apptainer_template() {
     let tmp = TempDir::new().unwrap();
     let config_path = init_config(&tmp);

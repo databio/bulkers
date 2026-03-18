@@ -118,6 +118,11 @@ pub fn activate(
     prompt: bool,
     force: bool,
 ) -> Result<()> {
+    // Guard against double activation
+    if let Ok(active) = std::env::var("BULKERCRATE") {
+        bail!("bulker: already activated ({}). Run 'bulker deactivate' first.", active);
+    }
+
     let result = get_new_path(config, cratelist, strict, force)?;
     let newpath = &result.path;
     let shimdir = &result.shimdir;

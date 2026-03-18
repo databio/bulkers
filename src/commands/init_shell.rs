@@ -35,6 +35,10 @@ bulker() {
   case "$1" in
     activate)
       shift
+      if [ -n "$BULKERCRATE" ]; then
+        echo "bulker: already activated ($BULKERCRATE). Run 'bulker deactivate' first." >&2
+        return 1
+      fi
       _BULKER_OLD_PS1="$PS1"
       eval "$(\command bulker activate --echo "$@")"
       if [ -n "$BULKERCRATE" ]; then
@@ -65,6 +69,10 @@ bulker() {
   case "$1" in
     activate)
       shift
+      if [ -n "$BULKERCRATE" ]; then
+        echo "bulker: already activated ($BULKERCRATE). Run 'bulker deactivate' first." >&2
+        return 1
+      fi
       _BULKER_OLD_PS1="$PS1"
       eval "$(\command bulker activate --echo "$@")"
       if [ -n "$BULKERCRATE" ]; then
