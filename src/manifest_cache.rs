@@ -229,7 +229,7 @@ pub fn remove_cached(cv: &CrateVars) -> Result<()> {
 
 /// Pull container images for all commands in a manifest.
 pub fn pull_images(config: &BulkerConfig, manifest: &Manifest) -> Result<()> {
-    let is_apptainer = config.bulker.container_engine == "apptainer";
+    let is_apptainer = config.is_apptainer();
     let build_template = templates::get_build_template(config);
 
     for pkg in &manifest.manifest.commands {

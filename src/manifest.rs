@@ -59,9 +59,9 @@ pub struct PackageCommand {
     pub docker_args: Option<String>,
     #[serde(default)]
     pub dockerargs: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "singularity_args")]
     pub apptainer_args: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "singularity_command")]
     pub apptainer_command: Option<String>,
     #[serde(default)]
     pub volumes: Vec<String>,

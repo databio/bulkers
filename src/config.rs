@@ -42,7 +42,7 @@ pub struct BulkerSettings {
     pub tool_args: Option<serde_yml::Value>,
     #[serde(default)]
     pub shell_prompt: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "singularity_image_folder")]
     pub apptainer_image_folder: Option<String>,
     #[serde(default)]
     pub engine_path: Option<String>,
@@ -93,10 +93,17 @@ fn default_envvars() -> Vec<String> {
 }
 
 impl BulkerSettings {
-    /// Fix serde_yml's behavior of deserializing YAML null as the string "null".
+    /// Fix serde_yml's behavior of deserializing YAML null as the string "null",
+    /// and warn about deprecated config keys.
     fn sanitize(&mut self) {
         if self.container_engine == "null" || self.container_engine.is_empty() {
             self.container_engine = default_container_engine();
+        }
+        if self.container_engine == "singularity" {
+            log::warn!(
+                "container_engine 'singularity' is deprecated, please use 'apptainer'. \
+                 Singularity was renamed to Apptainer; bulker treats them the same."
+            );
         }
         if self.engine_path.as_deref() == Some("null") || self.engine_path.as_deref() == Some("") {
             self.engine_path = None;
@@ -116,6 +123,14 @@ impl BulkerConfig {
             .with_context(|| format!("Failed to read config: {}", path.display()))?;
         let mut config: BulkerConfig = serde_yml::from_str(&contents)
             .with_context(|| format!("Failed to parse config: {}", path.display()))?;
+
+        // Warn about deprecated singularity_image_folder key
+        if contents.contains("singularity_image_folder") {
+            log::warn!(
+                "Config key 'singularity_image_folder' is deprecated, please use 'apptainer_image_folder'. \
+                 The value was read successfully but you should update your config file."
+            );
+        }
 
         // Fix YAML null values deserialized as the string "null"
         config.bulker.sanitize();
@@ -146,6 +161,12 @@ impl BulkerConfig {
     pub fn engine_path(&self) -> &str {
         self.bulker.engine_path.as_deref()
             .unwrap_or(&self.bulker.container_engine)
+    }
+
+    /// Returns true if the configured container engine is apptainer (or the
+    /// deprecated "singularity" name, which is the same engine).
+    pub fn is_apptainer(&self) -> bool {
+        matches!(self.bulker.container_engine.as_str(), "apptainer" | "singularity")
     }
 
     /// Look up host-tool-specific arguments from the config's tool_args.
@@ -559,5 +580,29 @@ mod tests {
         let config = BulkerConfig::from_file(&config_path).unwrap();
         assert_eq!(config.bulker.container_engine, "docker");
         assert_eq!(config.bulker.engine_path.as_deref(), Some("/usr/bin/docker"));
+    }
+
+    #[test]
+    fn test_is_apptainer_matches_both_engines() {
+        let mut config = BulkerConfig::test_default();
+        assert!(!config.is_apptainer(), "docker should not match");
+
+        config.bulker.container_engine = "apptainer".to_string();
+        assert!(config.is_apptainer());
+
+        config.bulker.container_engine = "singularity".to_string();
+        assert!(config.is_apptainer());
+    }
+
+    #[test]
+    fn test_singularity_config_aliases() {
+        let yaml = "bulker:\n  container_engine: singularity\n  singularity_image_folder: /data/sif\n";
+        let tmpdir = tempfile::tempdir().unwrap();
+        let config_path = tmpdir.path().join("config.yaml");
+        std::fs::write(&config_path, yaml).unwrap();
+
+        let config = BulkerConfig::from_file(&config_path).unwrap();
+        assert!(config.is_apptainer());
+        assert_eq!(config.bulker.apptainer_image_folder.as_deref(), Some("/data/sif"));
     }
 }
