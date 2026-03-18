@@ -253,7 +253,7 @@ fn ensure_apptainer_image(
     pkg: &PackageCommand,
     engine_path: &str,
 ) -> Result<()> {
-    let (apptainer_image, apptainer_fullpath) = crate::manifest::apptainer_image_paths(
+    let (_apptainer_image, apptainer_fullpath) = crate::manifest::apptainer_image_paths(
         &pkg.docker_image,
         config.bulker.apptainer_image_folder.as_deref(),
     );
@@ -270,28 +270,30 @@ fn ensure_apptainer_image(
         }
     }
 
+    // Pull to a .tmp file in the target directory to avoid cross-device rename errors.
+    // Also set APPTAINER_TMPDIR so apptainer's internal temp files stay on the same filesystem.
+    let tmp_path = format!("{}.tmp", fullpath);
     log::info!("Pulling apptainer image for '{}': docker://{}", pkg.command, pkg.docker_image);
-    let status = std::process::Command::new(engine_path)
-        .arg("pull")
-        .arg(&apptainer_image)
-        .arg(format!("docker://{}", pkg.docker_image))
+    let mut cmd = std::process::Command::new(engine_path);
+    cmd.arg("pull")
+        .arg(&tmp_path)
+        .arg(format!("docker://{}", pkg.docker_image));
+    if let Some(parent) = Path::new(&fullpath).parent() {
+        cmd.env("APPTAINER_TMPDIR", parent);
+    }
+    let status = cmd
         .status()
         .with_context(|| format!("Failed to run '{} pull'", engine_path))?;
 
     if !status.success() {
+        // Clean up partial .tmp file on failure
+        let _ = std::fs::remove_file(&tmp_path);
         bail!("Failed to pull apptainer image for '{}': docker://{}", pkg.command, pkg.docker_image);
     }
 
-    // Move to the configured folder if the pull wrote to current directory
-    if config.bulker.apptainer_image_folder.is_some() {
-        let cwd_image = std::env::current_dir()
-            .unwrap_or_default()
-            .join(&apptainer_image);
-        if cwd_image.exists() && cwd_image.to_string_lossy() != fullpath {
-            std::fs::rename(&cwd_image, &fullpath)
-                .with_context(|| format!("Failed to move SIF to {}", fullpath))?;
-        }
-    }
+    // Atomic rename from .tmp to final path (same filesystem, so rename() works)
+    std::fs::rename(&tmp_path, &fullpath)
+        .with_context(|| format!("Failed to move SIF to {}", fullpath))?;
 
     Ok(())
 }
