@@ -147,7 +147,7 @@ pub fn render_template_apptainer(
 
 /// Get the executable template content for the configured engine.
 pub fn get_exe_template(config: &BulkerConfig) -> &'static str {
-    if config.bulker.container_engine == "apptainer" {
+    if config.is_apptainer() {
         APPTAINER_EXE_TEMPLATE
     } else {
         DOCKER_EXE_TEMPLATE
@@ -156,7 +156,7 @@ pub fn get_exe_template(config: &BulkerConfig) -> &'static str {
 
 /// Get the build template content for the configured engine.
 pub fn get_build_template(config: &BulkerConfig) -> &'static str {
-    if config.bulker.container_engine == "apptainer" {
+    if config.is_apptainer() {
         APPTAINER_BUILD_TEMPLATE
     } else {
         DOCKER_BUILD_TEMPLATE

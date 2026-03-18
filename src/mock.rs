@@ -101,7 +101,7 @@ pub fn load_recording_crate(
         .with_context(|| format!("Failed to create recording crate dir: {}", crate_path.display()))?;
 
     let exe_template = templates::get_exe_template(config);
-    let is_apptainer = config.bulker.container_engine == "apptainer";
+    let is_apptainer = config.is_apptainer();
     let mut count = 0;
 
     for pkg in &manifest.manifest.commands {

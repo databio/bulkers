@@ -404,6 +404,82 @@ fn test_host_exec_passthrough() {
 }
 
 #[test]
+fn test_singularity_engine_uses_apptainer_template() {
+    let tmp = TempDir::new().unwrap();
+    let config_path = init_config(&tmp);
+
+    // Set container_engine to singularity and set an image folder so SIF paths resolve
+    let sif_dir = tmp.path().join("sif");
+    fs::create_dir_all(&sif_dir).unwrap();
+    let output = bulker_cmd(tmp.path())
+        .args(["config", "set", "-c", config_path.to_str().unwrap(), "container_engine=singularity"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let output = bulker_cmd(tmp.path())
+        .args(["config", "set", "-c", config_path.to_str().unwrap(),
+               &format!("apptainer_image_folder={}", sif_dir.to_str().unwrap())])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    install_test_crate(&tmp, &config_path);
+
+    // Pre-create a fake SIF so auto-pull is skipped
+    fs::write(sif_dir.join("nsheff-cowsay.sif"), "fake").unwrap();
+
+    // Use exec with -p (print command) to see the generated command
+    let output = bulker_cmd(tmp.path())
+        .args([
+            "exec",
+            "-c", config_path.to_str().unwrap(),
+            "-p",
+            "bulker/test-crate:1.0.0",
+            "--",
+            "cowsay", "hello",
+        ])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // The printed command should use apptainer-style exec, NOT docker-style run --rm
+    assert!(stdout.contains("exec"), "singularity engine should use 'exec': stdout={}\nstderr={}", stdout, stderr);
+    assert!(!stdout.contains("--rm"), "singularity engine should NOT have --rm (docker flag): {}", stdout);
+    assert!(!stdout.contains("--init"), "singularity engine should NOT have --init (docker flag): {}", stdout);
+
+    // Should warn about deprecated engine name
+    assert!(stderr.contains("deprecated") || stderr.contains("singularity"),
+        "should warn about deprecated singularity engine: {}", stderr);
+}
+
+#[test]
+fn test_singularity_image_folder_alias_in_config() {
+    let tmp = TempDir::new().unwrap();
+    let config_path = tmp.path().join("bulker_config.yaml");
+
+    // Write a config with the old singularity_image_folder key
+    let config_content = "bulker:\n  container_engine: apptainer\n  singularity_image_folder: /data/sif\n";
+    fs::write(&config_path, config_content).unwrap();
+
+    // Get the apptainer_image_folder value -- should read the alias
+    let output = bulker_cmd(tmp.path())
+        .args(["config", "get", "-c", config_path.to_str().unwrap(), "apptainer_image_folder"])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "config get failed: {}", stderr);
+    assert!(stdout.contains("/data/sif"), "singularity_image_folder alias not read: {}", stdout);
+
+    // Should warn about deprecated key
+    assert!(stderr.contains("deprecated") || stderr.contains("singularity_image_folder"),
+        "should warn about deprecated singularity_image_folder: {}", stderr);
+}
+
+#[test]
 fn test_activate_strict_echo_no_host_path() {
     let tmp = TempDir::new().unwrap();
     let config_path = init_config(&tmp);

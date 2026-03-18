@@ -87,9 +87,14 @@ pub fn shimlink_exec(command_name: &str, args: &[String]) -> Result<()> {
     let docker_args = pkg.merged_docker_args(&[&tool_extra, &env_extra]);
 
     // 7. Build and exec the container command
-    let is_apptainer = config.bulker.container_engine == "apptainer";
+    let is_apptainer = config.is_apptainer();
 
     let engine_path = config.engine_path();
+
+    // Auto-pull missing apptainer SIF images (skip in print-command mode)
+    if is_apptainer && std::env::var("BULKER_PRINT_COMMAND").is_err() {
+        ensure_apptainer_image(&config, &pkg, engine_path)?;
+    }
 
     let cmd_vec = if is_apptainer {
         build_apptainer_command(
@@ -240,6 +245,55 @@ pub fn build_docker_command(
     }
 
     cmd
+}
+
+/// Ensure the apptainer SIF image exists, pulling from docker:// if missing.
+fn ensure_apptainer_image(
+    config: &BulkerConfig,
+    pkg: &PackageCommand,
+    engine_path: &str,
+) -> Result<()> {
+    let (apptainer_image, apptainer_fullpath) = crate::manifest::apptainer_image_paths(
+        &pkg.docker_image,
+        config.bulker.apptainer_image_folder.as_deref(),
+    );
+    let fullpath = expand_path(&apptainer_fullpath);
+    if Path::new(&fullpath).exists() {
+        return Ok(());
+    }
+
+    // Create parent directory if needed
+    if let Some(parent) = Path::new(&fullpath).parent() {
+        if !parent.exists() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("Failed to create image directory: {}", parent.display()))?;
+        }
+    }
+
+    log::info!("Pulling apptainer image for '{}': docker://{}", pkg.command, pkg.docker_image);
+    let status = std::process::Command::new(engine_path)
+        .arg("pull")
+        .arg(&apptainer_image)
+        .arg(format!("docker://{}", pkg.docker_image))
+        .status()
+        .with_context(|| format!("Failed to run '{} pull'", engine_path))?;
+
+    if !status.success() {
+        bail!("Failed to pull apptainer image for '{}': docker://{}", pkg.command, pkg.docker_image);
+    }
+
+    // Move to the configured folder if the pull wrote to current directory
+    if config.bulker.apptainer_image_folder.is_some() {
+        let cwd_image = std::env::current_dir()
+            .unwrap_or_default()
+            .join(&apptainer_image);
+        if cwd_image.exists() && cwd_image.to_string_lossy() != fullpath {
+            std::fs::rename(&cwd_image, &fullpath)
+                .with_context(|| format!("Failed to move SIF to {}", fullpath))?;
+        }
+    }
+
+    Ok(())
 }
 
 /// Build an apptainer exec command from resolved command config.
@@ -1247,6 +1301,52 @@ mod tests {
         unsafe { std::env::remove_var("MY_TEST_VAR_APT"); }
         assert!(cmd.contains(&"--env".to_string()), "strict-env should pass allowlisted vars: {:?}", cmd);
         assert!(cmd.contains(&"MY_TEST_VAR_APT=testval".to_string()), "should pass var=value: {:?}", cmd);
+    }
+
+    #[test]
+    fn test_singularity_engine_uses_apptainer_command() {
+        let mut config = BulkerConfig::test_default();
+        config.bulker.container_engine = "singularity".to_string();
+        config.bulker.apptainer_image_folder = Some("/data/sif".to_string());
+
+        let pkg = PackageCommand {
+            command: "R".to_string(),
+            docker_image: "bioconductor/bioconductor_docker:latest".to_string(),
+            ..Default::default()
+        };
+        let cmd = build_apptainer_command(&config, &pkg, &[], &[], &[], false, "singularity");
+        assert_eq!(cmd[0], "singularity");
+        assert_eq!(cmd[1], "exec");
+        let sif_arg = cmd.iter().find(|a| a.contains(".sif")).unwrap();
+        assert!(sif_arg.starts_with("/data/sif/"), "SIF path should use configured folder: {}", sif_arg);
+        assert!(!cmd.contains(&"--rm".to_string()), "should not have docker --rm flag: {:?}", cmd);
+    }
+
+    #[test]
+    fn test_ensure_apptainer_image_skips_existing() {
+        let tmpdir = tempfile::tempdir().unwrap();
+        let sif_dir = tmpdir.path().join("sif");
+        std::fs::create_dir_all(&sif_dir).unwrap();
+
+        let mut config = BulkerConfig::test_default();
+        config.bulker.container_engine = "apptainer".to_string();
+        config.bulker.apptainer_image_folder = Some(sif_dir.to_string_lossy().to_string());
+
+        let pkg = PackageCommand {
+            command: "cowsay".to_string(),
+            docker_image: "nsheff/cowsay:latest".to_string(),
+            ..Default::default()
+        };
+
+        // Pre-create the SIF file
+        let (_, fullpath) = crate::manifest::apptainer_image_paths(
+            &pkg.docker_image,
+            config.bulker.apptainer_image_folder.as_deref(),
+        );
+        std::fs::write(&fullpath, "fake sif").unwrap();
+
+        let result = ensure_apptainer_image(&config, &pkg, "apptainer");
+        assert!(result.is_ok());
     }
 
 }
