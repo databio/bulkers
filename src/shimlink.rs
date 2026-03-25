@@ -586,16 +586,23 @@ pub(crate) const DEFAULT_ENVVARS: &[&str] = &[
     "http_proxy",
     "https_proxy",
     "no_proxy",
+    // Cloud credentials
+    "AWS_*",
+    "GOOGLE_*",
+    "AZURE_*",
+    "GITHUB_*",
+    "GH_*",
     // HPC / scheduler
     "SLURM_*",
     "PBS_*",
     "SGE_*",
     "LSB_*",
     "TMPDIR",
-    // R (safe non-path vars only)
-    "R_HOME",
+    // R (config file pointers only — NOT library paths)
     "R_PROFILE",
     "R_ENVIRON",
+    "R_PROFILE_USER",
+    "R_ENVIRON_USER",
     // Misc
     "RUST_LOG",
     "EDITOR",
