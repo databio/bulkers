@@ -317,8 +317,8 @@ pub(crate) fn merge_lists(primary: &mut Vec<String>, secondary: &[String]) {
 /// Compute the apptainer SIF image filename and full path for a docker image.
 /// Returns (image_filename, full_path) where full_path includes the image folder if configured.
 pub(crate) fn apptainer_image_paths(docker_image: &str, image_folder: Option<&str>) -> (String, String) {
-    let (img_ns, img_name, _img_tag) = parse_docker_image_path(docker_image);
-    let image_filename = format!("{}-{}.sif", img_ns, img_name);
+    let (img_ns, img_name, img_tag) = parse_docker_image_path(docker_image);
+    let image_filename = format!("{}-{}-{}.sif", img_ns, img_name, img_tag);
     let full_path = image_folder
         .map(|f| format!("{}/{}", f, image_filename))
         .unwrap_or_else(|| image_filename.clone());
@@ -584,5 +584,30 @@ mod tests {
         let f = write_temp_manifest("manifest:\n  name: bulker/biobase\n  commands: []\n");
         let (cv, _) = load_local_manifest(f.path().to_str().unwrap(), None, "bulker").unwrap();
         assert_eq!(cv.tag, "default");
+    }
+
+    #[test]
+    fn test_apptainer_image_paths_includes_tag() {
+        let (filename, _) = apptainer_image_paths("quay.io/biocontainers/samtools:1.9--h91753b0_8", None);
+        assert_eq!(filename, "quay-io-biocontainers-samtools-1.9--h91753b0_8.sif");
+    }
+
+    #[test]
+    fn test_apptainer_image_paths_no_tag_uses_latest() {
+        let (filename, _) = apptainer_image_paths("python", None);
+        assert_eq!(filename, "docker-python-latest.sif");
+    }
+
+    #[test]
+    fn test_apptainer_image_paths_different_tags_differ() {
+        let (filename1, _) = apptainer_image_paths("org/tool:1.0", None);
+        let (filename2, _) = apptainer_image_paths("org/tool:2.0", None);
+        assert_ne!(filename1, filename2);
+    }
+
+    #[test]
+    fn test_apptainer_image_paths_with_folder() {
+        let (_, full_path) = apptainer_image_paths("python:3.12", Some("/images"));
+        assert_eq!(full_path, "/images/docker-python-3.12.sif");
     }
 }

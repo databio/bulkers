@@ -5,6 +5,7 @@ mod activate;
 mod commands;
 mod config;
 mod digest;
+mod filelock;
 mod imports;
 mod manifest;
 mod manifest_cache;

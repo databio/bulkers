@@ -228,6 +228,7 @@ pub fn remove_cached(cv: &CrateVars) -> Result<()> {
 }
 
 /// Pull container images for all commands in a manifest.
+/// For apptainer images, uses file locking to prevent concurrent pulls.
 pub fn pull_images(config: &BulkerConfig, manifest: &Manifest) -> Result<()> {
     let is_apptainer = config.is_apptainer();
     let build_template = templates::get_build_template(config);
@@ -235,13 +236,39 @@ pub fn pull_images(config: &BulkerConfig, manifest: &Manifest) -> Result<()> {
     for pkg in &manifest.manifest.commands {
         let extra_args = config.host_tool_specific_args(pkg, "docker_args");
 
-        let build_content = if is_apptainer {
+        if is_apptainer {
             let (apptainer_image, apptainer_fullpath) = crate::manifest::apptainer_image_paths(
                 &pkg.docker_image,
                 config.bulker.apptainer_image_folder.as_deref(),
             );
 
-            templates::render_template_apptainer(
+            let fullpath = crate::config::expand_path(&apptainer_fullpath);
+
+            // Fast path: already exists
+            if std::path::Path::new(&fullpath).exists() {
+                log::info!("Image already exists for '{}': {}", pkg.command, fullpath);
+                continue;
+            }
+
+            // Create parent directory if needed
+            if let Some(parent) = std::path::Path::new(&fullpath).parent() {
+                if !parent.exists() {
+                    std::fs::create_dir_all(parent)
+                        .with_context(|| format!("Failed to create image directory: {}", parent.display()))?;
+                }
+            }
+
+            // Acquire exclusive lock to prevent concurrent pulls
+            let lock_path = format!("{}.lock", fullpath);
+            let _lock = crate::filelock::FileLock::acquire(std::path::Path::new(&lock_path))?;
+
+            // Re-check after acquiring lock
+            if std::path::Path::new(&fullpath).exists() {
+                log::info!("Image already exists for '{}': {} (acquired after lock)", pkg.command, fullpath);
+                continue;
+            }
+
+            let build_content = templates::render_template_apptainer(
                 build_template,
                 "build",
                 config,
@@ -249,19 +276,30 @@ pub fn pull_images(config: &BulkerConfig, manifest: &Manifest) -> Result<()> {
                 &extra_args,
                 &apptainer_image,
                 &apptainer_fullpath,
-            )?
-        } else {
-            templates::render_template(build_template, "build", config, pkg, &extra_args)?
-        };
+            )?;
 
-        log::info!("Building image for: {}", pkg.command);
-        let status = std::process::Command::new("/bin/sh")
-            .arg("-c")
-            .arg(&build_content)
-            .status()
-            .context("Failed to run build script")?;
-        if !status.success() {
-            log::warn!("Build script failed for: {}", pkg.command);
+            log::info!("Building image for: {}", pkg.command);
+            let status = std::process::Command::new("/bin/sh")
+                .arg("-c")
+                .arg(&build_content)
+                .status()
+                .context("Failed to run build script")?;
+            if !status.success() {
+                log::warn!("Build script failed for: {}", pkg.command);
+            }
+            // _lock dropped here, releasing flock
+        } else {
+            let build_content = templates::render_template(build_template, "build", config, pkg, &extra_args)?;
+
+            log::info!("Building image for: {}", pkg.command);
+            let status = std::process::Command::new("/bin/sh")
+                .arg("-c")
+                .arg(&build_content)
+                .status()
+                .context("Failed to run build script")?;
+            if !status.success() {
+                log::warn!("Build script failed for: {}", pkg.command);
+            }
         }
     }
     Ok(())
