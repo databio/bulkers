@@ -89,6 +89,10 @@ bulker config init                # create new config file
 bulker config show                # print current config
 bulker config get <key>           # get a config value
 bulker config set <key>=<value>   # set a config value
+bulker env                        # show env var forwarding settings
+bulker env add <name>             # forward a host var (or glob pattern)
+bulker env set <KEY>=<VALUE>      # hardcode a value
+bulker env remove <name>          # stop forwarding a var
 ```
 
 ## Crate format reference

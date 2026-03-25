@@ -55,6 +55,7 @@ CRATE FORMAT:
         )
         .arg(
             Arg::new("host_env")
+                .short('H')
                 .long("host-env")
                 .action(ArgAction::SetTrue)
                 .help("Forward all host environment variables (overrides allowlist)"),

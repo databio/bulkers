@@ -39,6 +39,7 @@ manifest:
 - `exec <crate> -- <cmd>` — run one command without activating
 - `crate install|list|inspect|clean` — manage cached manifests
 - `config init|show|get|set` — manage configuration
+- `env [add|set|remove]` — manage env var forwarding allowlist
 - `mock run|record` — CI testing without containers
 - `init-shell <shell>` — print shell function for eval
 - `completions <shell>` — print shell completions
