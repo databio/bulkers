@@ -54,10 +54,10 @@ CRATE FORMAT:
                 .help("Do not modify the shell prompt"),
         )
         .arg(
-            Arg::new("strict_env")
-                .long("strict-env")
+            Arg::new("host_env")
+                .long("host-env")
                 .action(ArgAction::SetTrue)
-                .help("Clean container environment: only pass envvars allowlist (config + manifest)"),
+                .help("Forward all host environment variables (overrides allowlist)"),
         )
         .arg(
             Arg::new("force")
@@ -80,7 +80,7 @@ pub fn run(matches: &ArgMatches) -> Result<()> {
     let registry_paths = matches.get_one::<String>("crate_registry_paths").unwrap();
     let echo = matches.get_flag("echo");
     let strict = matches.get_flag("strict");
-    let strict_env = matches.get_flag("strict_env");
+    let host_env = matches.get_flag("host_env");
     let hide_prompt = matches.get_flag("hide-prompt");
     let force = matches.get_flag("force");
     let name_override = matches.get_one::<String>("name").map(|s| s.as_str());
@@ -98,5 +98,5 @@ pub fn run(matches: &ArgMatches) -> Result<()> {
         parse_registry_paths(registry_paths, &config.bulker.default_namespace)?
     };
 
-    crate::activate::activate(&config, config_path.as_deref(), &cratelist, echo, strict, strict_env, !hide_prompt, force)
+    crate::activate::activate(&config, config_path.as_deref(), &cratelist, echo, strict, host_env, !hide_prompt, force)
 }

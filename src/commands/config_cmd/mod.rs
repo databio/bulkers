@@ -9,7 +9,11 @@ use anyhow::Result;
 use clap::{Arg, ArgMatches, Command};
 
 fn is_list_key(key: &str) -> bool {
-    matches!(key, "envvars" | "volumes")
+    matches!(key, "volumes")
+}
+
+fn is_envvars_key(key: &str) -> bool {
+    key == "envvars"
 }
 
 pub fn create_cli() -> Command {

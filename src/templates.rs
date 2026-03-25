@@ -74,9 +74,22 @@ fn build_context(
 
     ctx.insert("volumes", &volumes);
 
-    // Merge envvars: config-level + command-level
-    let mut envvars = config.bulker.envvars.clone();
-    crate::manifest::merge_lists(&mut envvars, &pkg.envvars);
+    // Merge envvars: allowlist mode for templates
+    let host_env = std::env::var("BULKER_HOST_ENV").is_ok();
+    let envvars = if host_env {
+        std::env::vars().map(|(k, _)| k)
+            .filter(|k| !k.starts_with("BULKER") && k != "PATH" && k != "HOME" && k != "HOSTNAME")
+            .collect()
+    } else {
+        let mut patterns: Vec<String> = if pkg.no_default_envvars || config.bulker.no_default_envvars {
+            Vec::new()
+        } else {
+            crate::shimlink::DEFAULT_ENVVARS.iter().map(|s| s.to_string()).collect()
+        };
+        crate::manifest::merge_lists(&mut patterns, &pkg.envvars);
+        crate::manifest::merge_lists(&mut patterns, &config.bulker.envvars);
+        crate::shimlink::expand_envvar_patterns(&patterns)
+    };
     ctx.insert("envvars", &envvars);
 
     ctx.insert("engine_path", config.engine_path());

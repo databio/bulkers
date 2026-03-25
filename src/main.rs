@@ -45,6 +45,7 @@ pub fn build_parser() -> Command {
         .subcommand(commands::exec::create_cli())
         .subcommand(commands::crate_cmd::create_cli())
         .subcommand(commands::config_cmd::create_cli())
+        .subcommand(commands::env_cmd::create_cli())
         .subcommand(commands::init_shell::create_cli())
         .subcommand(commands::mock_cmd::create_cli())
         .subcommand(commands::completions::create_cli())
@@ -96,6 +97,7 @@ fn main() -> Result<()> {
         Some(("exec", sub_m)) => commands::exec::run(sub_m),
         Some(("crate", sub_m)) => commands::crate_cmd::dispatch(sub_m),
         Some(("config", sub_m)) => commands::config_cmd::dispatch(sub_m),
+        Some(("env", sub_m)) => commands::env_cmd::dispatch(sub_m),
         Some(("init-shell", sub_m)) => commands::init_shell::run(sub_m),
         Some(("mock", sub_m)) => commands::mock_cmd::dispatch(sub_m),
         Some(("completions", sub_m)) => commands::completions::run(sub_m),

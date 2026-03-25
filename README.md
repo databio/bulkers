@@ -137,25 +137,30 @@ bulker exec -s bulker/demo -- cowsay hi
 
 ## Environment variable modes
 
-By default, bulker passes all host environment variables into containers. This mirrors how native commands work — your `LANG`, `DISPLAY`, `EDITOR`, and other env vars are available inside the container.
+By default, bulker forwards a curated allowlist of host environment variables into containers — terminal settings, locale, SSH agent, HPC scheduler vars, and similar. This keeps containers clean while still working seamlessly in most environments.
 
-For reproducible or isolated environments, use `--strict-env`:
+Use `--host-env` to forward all host vars (the old default), or `-s` to restrict PATH to crate commands only. These are independent — combine them as needed:
+
+| Mode | `bulker activate` | `bulker exec` | Host commands | Host env vars |
+|---|---|---|---|---|
+| Most lenient | `bulker activate --host-env crate` | `bulker exec --host-env crate -- cmd` | **Lenient**: All (shimdir prepended to PATH) | **Lenient**: All host vars |
+| Default | `bulker activate crate` | `bulker exec crate -- cmd` | **Lenient**: All (shimdir prepended to PATH) | **Strict**: Allowlist only |
+| Strict PATH, lenient env | `bulker activate -s --host-env crate` | `bulker exec -s --host-env crate -- cmd` | **Strict**: Crate + `host_commands` only | **Lenient**: All host vars |
+| Most strict | `bulker activate -s crate` | `bulker exec -s crate -- cmd` | **Strict**: Crate + `host_commands` only | **Strict**: Allowlist only |
+
+### Managing the env var allowlist
 
 ```bash
-bulker activate --strict-env bulker/demo
-bulker exec --strict-env bulker/demo -- cowsay hello
+bulker env                      # show defaults + user additions + resolved vars
+bulker env add MY_CUSTOM_DB     # forward a host var by name
+bulker env add "AWS_*"          # forward all vars matching a prefix
+bulker env set LANG=C           # hardcode a value
+bulker env remove MY_CUSTOM_DB  # stop forwarding a var
 ```
 
-With `--strict-env`, containers start with a clean environment. Only variables listed in the `envvars` config key (and per-command `envvars` in the manifest) are passed through.
+The allowlist is built from four layers (later wins): compiled-in defaults → manifest `envvars` → config `envvars` → `BULKER_EXTRA_ENVVARS` env var. Per-command `no_default_envvars: true` skips the compiled-in defaults.
 
-| | PATH commands | Environment variables |
-|---|---|---|
-| **Normal mode** | All host commands + crate commands on PATH | All host env vars passed to container |
-| **`--strict` + `--strict-env`** | Only crate commands + `host_commands` on PATH | Only `envvars` allowlist passed to container |
-
-The `envvars` config key and per-command `envvars` in manifests define the allowlist used by `--strict-env`. They are ignored in normal mode (since all vars are passed anyway).
-
-For Docker, `--strict-env` controls which `--env` flags are added. For Apptainer, it adds `--cleanenv` and passes allowlisted vars via `--env`.
+For Apptainer, `--cleanenv` is always active; allowed vars are passed explicitly via `--env`.
 
 ## macOS notes
 

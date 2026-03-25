@@ -65,20 +65,32 @@ pub fn shimlink_exec(command_name: &str, args: &[String]) -> Result<()> {
         volumes.push(tmpdir);
     }
 
-    // 5. Collect envvars based on mode
-    let strict_env = std::env::var("BULKER_STRICT_ENV").is_ok();
-    let envvars = if strict_env {
-        // Strict-env mode: only pass allowlisted vars (config + manifest + extras)
-        let mut vars = config.bulker.envvars.clone();
-        crate::manifest::merge_lists(&mut vars, &pkg.envvars);
-        if let Ok(extra) = std::env::var("BULKER_EXTRA_ENVVARS") {
-            let extras: Vec<String> = extra.split(',').map(|e| e.trim().to_string()).filter(|e| !e.is_empty()).collect();
-            crate::manifest::merge_lists(&mut vars, &extras);
-        }
-        vars
+    // 5. Collect env vars
+    let host_env = std::env::var("BULKER_HOST_ENV").is_ok();
+    let envvars = if host_env {
+        // --host-env: forward all host vars except bulker internals
+        std::env::vars()
+            .map(|(k, _)| k)
+            .filter(|k| !k.starts_with("BULKER"))
+            .filter(|k| k != "PATH" && k != "HOME" && k != "HOSTNAME")
+            .collect()
     } else {
-        // Normal mode: pass all host env vars except Docker-managed ones
-        collect_host_envvars()
+        // Allowlist mode (default)
+        let mut patterns: Vec<String> = if pkg.no_default_envvars || config.bulker.no_default_envvars {
+            Vec::new()
+        } else {
+            DEFAULT_ENVVARS.iter().map(|s| s.to_string()).collect()
+        };
+        crate::manifest::merge_lists(&mut patterns, &pkg.envvars);
+        crate::manifest::merge_lists(&mut patterns, &config.bulker.envvars);
+        if let Ok(extra) = std::env::var("BULKER_EXTRA_ENVVARS") {
+            let extras: Vec<String> = extra.split(',')
+                .map(|e| e.trim().to_string())
+                .filter(|e| !e.is_empty())
+                .collect();
+            crate::manifest::merge_lists(&mut patterns, &extras);
+        }
+        expand_envvar_patterns(&patterns)
     };
 
     // 6. Merge docker_args from multiple sources
@@ -325,18 +337,17 @@ pub fn build_apptainer_command(
         config.bulker.apptainer_image_folder.as_deref(),
     );
 
-    let strict_env = std::env::var("BULKER_STRICT_ENV").is_ok();
-
     let mut cmd = vec![engine_path.to_string(), "exec".to_string()];
 
-    // Strict-env mode: clean environment, then pass allowlisted vars explicitly
-    if strict_env {
-        cmd.push("--cleanenv".to_string());
-        for var in envvars {
-            if let Ok(val) = std::env::var(var) {
-                cmd.push("--env".to_string());
-                cmd.push(format!("{}={}", var, val));
-            }
+    // Always use --cleanenv + explicit --env for each allowed var
+    cmd.push("--cleanenv".to_string());
+    for var in envvars {
+        if let Some((key, val)) = var.split_once('=') {
+            cmd.push("--env".to_string());
+            cmd.push(format!("{}={}", key, val));
+        } else if let Ok(val) = std::env::var(var) {
+            cmd.push("--env".to_string());
+            cmd.push(format!("{}={}", var, val));
         }
     }
 
@@ -551,23 +562,88 @@ pub(crate) fn tmpdir_volume() -> String {
         .unwrap_or_else(|_| "/tmp".to_string())
 }
 
-/// Env vars managed by Docker that should not be passed from the host.
-const DOCKER_MANAGED_VARS: &[&str] = &["PATH", "HOME", "HOSTNAME"];
+/// Default environment variable patterns forwarded into containers.
+/// Prefix patterns (e.g., "SLURM_*") match any host var with that prefix.
+/// Cloud credentials and path-based vars are intentionally excluded —
+/// add them via manifest envvars or `bulker env add`.
+pub(crate) const DEFAULT_ENVVARS: &[&str] = &[
+    // Terminal and display
+    "TERM",
+    "COLORTERM",
+    "DISPLAY",
+    "WAYLAND_DISPLAY",
+    "XDG_RUNTIME_DIR",
+    "DBUS_SESSION_BUS_ADDRESS",
+    // Locale
+    "LANG",
+    // SSH and GPG
+    "SSH_AUTH_SOCK",
+    "GPG_AGENT_INFO",
+    // Proxy
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "NO_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "no_proxy",
+    // HPC / scheduler
+    "SLURM_*",
+    "PBS_*",
+    "SGE_*",
+    "LSB_*",
+    "TMPDIR",
+    // R (safe non-path vars only)
+    "R_HOME",
+    "R_PROFILE",
+    "R_ENVIRON",
+    // Misc
+    "RUST_LOG",
+    "EDITOR",
+    "VISUAL",
+];
 
-/// Locale vars that should not be forwarded — containers typically lack the
-/// matching locale files, which causes spurious warnings (e.g. from Perl).
-const LOCALE_VARS: &[&str] = &["LANG", "LANGUAGE", "LC_ALL", "LC_COLLATE", "LC_CTYPE",
-    "LC_MESSAGES", "LC_MONETARY", "LC_NUMERIC", "LC_TIME"];
+/// Expand envvar patterns against the current host environment.
+/// - Exact names (e.g. "TERM"): included if set on host, as the name only
+/// - Prefix globs (e.g. "SLURM_*"): expand to all matching host vars
+/// - KEY=VALUE (e.g. "LANG=C"): included unconditionally as-is
+///
+/// At most one entry per key in the output. Later entries win.
+pub(crate) fn expand_envvar_patterns(patterns: &[String]) -> Vec<String> {
+    let mut result: Vec<String> = Vec::new();
 
-/// Collect all host environment variable names, excluding Docker-managed vars
-/// and bulker internal vars.
-fn collect_host_envvars() -> Vec<String> {
-    std::env::vars()
-        .map(|(k, _)| k)
-        .filter(|k| !DOCKER_MANAGED_VARS.contains(&k.as_str()))
-        .filter(|k| !LOCALE_VARS.contains(&k.as_str()))
-        .filter(|k| !k.starts_with("BULKER"))
-        .collect()
+    for pattern in patterns {
+        if let Some((key, _val)) = pattern.split_once('=') {
+            // KEY=VALUE: pass through unconditionally, replace any existing entry for this key
+            remove_key(&mut result, key);
+            result.push(pattern.clone());
+        } else if pattern.ends_with('*') {
+            // Prefix glob: expand against host env
+            let prefix = &pattern[..pattern.len() - 1];
+            for (k, _) in std::env::vars() {
+                if k.starts_with(prefix) {
+                    remove_key(&mut result, &k);
+                    result.push(k);
+                }
+            }
+        } else {
+            // Exact name: include only if set on host
+            if std::env::var(pattern).is_ok() {
+                remove_key(&mut result, pattern);
+                result.push(pattern.clone());
+            }
+        }
+    }
+
+    result
+}
+
+/// Remove any entry for a given key from the envvar list.
+/// Handles both name-only ("KEY") and KEY=VALUE ("KEY=...") forms.
+fn remove_key(list: &mut Vec<String>, key: &str) {
+    list.retain(|entry| {
+        let entry_key = entry.split_once('=').map(|(k, _)| k).unwrap_or(entry);
+        entry_key != key
+    });
 }
 
 /// Check if stdin is connected to a TTY (terminal).
@@ -898,6 +974,7 @@ mod tests {
                         no_user: false,
                         no_network: false,
                         no_default_volumes: false,
+                        no_default_envvars: false,
                         workdir: None,
                     },
                     PackageCommand {
@@ -913,6 +990,7 @@ mod tests {
                         no_user: false,
                         no_network: false,
                         no_default_volumes: false,
+                        no_default_envvars: false,
                         workdir: None,
                     },
                 ],
@@ -1148,55 +1226,75 @@ mod tests {
         assert_eq!(strip_tty_flag(""), "");
     }
 
-    // ─── env var mode tests ───────────────────────────────────────────────
+    // ─── allowlist env var tests ──────────────────────────────────────────
 
     #[test]
-    fn test_collect_host_envvars_excludes_docker_managed() {
-        let vars = collect_host_envvars();
-        assert!(!vars.contains(&"PATH".to_string()));
-        assert!(!vars.contains(&"HOME".to_string()));
-        assert!(!vars.contains(&"HOSTNAME".to_string()));
+    fn test_expand_exact_match() {
+        let _guard = crate::test_util::EnvGuard::set("BULKER_TEST_EXACT", "val");
+        let patterns = vec!["BULKER_TEST_EXACT".to_string()];
+        let result = expand_envvar_patterns(&patterns);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], "BULKER_TEST_EXACT");
     }
 
     #[test]
-    fn test_collect_host_envvars_excludes_bulker_vars() {
-        // BULKERCRATE etc. are set in activated environments — should not leak into containers
-        // Use EnvGuard to set a BULKER_ var, then verify it's excluded
-        let _guard = crate::test_util::EnvGuard::set("BULKER_TEST_INTERNAL", "x");
-        let vars = collect_host_envvars();
-        assert!(!vars.contains(&"BULKER_TEST_INTERNAL".to_string()));
+    fn test_expand_unset_var_excluded() {
+        let _guard = crate::test_util::EnvGuard::remove("BULKER_TEST_UNSET_XYZ");
+        let patterns = vec!["BULKER_TEST_UNSET_XYZ".to_string()];
+        let result = expand_envvar_patterns(&patterns);
+        assert!(result.is_empty());
     }
 
     #[test]
-    fn test_collect_host_envvars_includes_regular_vars() {
-        let _guard = crate::test_util::EnvGuard::set("MY_CUSTOM_VAR_FOR_TEST", "hello");
-        let vars = collect_host_envvars();
-        assert!(vars.contains(&"MY_CUSTOM_VAR_FOR_TEST".to_string()));
+    fn test_expand_glob() {
+        // Use a unique prefix to avoid matching real env vars
+        let _guard1 = crate::test_util::EnvGuard::set("BTEST_GLOB_A", "123");
+        // SAFETY: already hold ENV_MUTEX via _guard1 above
+        unsafe { std::env::set_var("BTEST_GLOB_B", "456"); }
+        let patterns = vec!["BTEST_GLOB_*".to_string()];
+        let result = expand_envvar_patterns(&patterns);
+        // Clean up before assertions so panic doesn't leak
+        unsafe { std::env::remove_var("BTEST_GLOB_B"); }
+        assert_eq!(result.len(), 2);
+        assert!(result.contains(&"BTEST_GLOB_A".to_string()));
+        assert!(result.contains(&"BTEST_GLOB_B".to_string()));
     }
 
     #[test]
-    fn test_normal_mode_docker_passes_all_host_envvars() {
-        // In normal mode, the envvar list should include arbitrary host env vars.
-        // Set a test var, collect all host vars, and verify it's in the docker command.
-        let _guard = crate::test_util::EnvGuard::set("ENVTEST_XYZ", "hello");
-        let envvars = collect_host_envvars();
-        assert!(envvars.contains(&"ENVTEST_XYZ".to_string()));
-
-        let config = BulkerConfig::test_default();
-        let pkg = PackageCommand {
-            command: "tool".to_string(),
-            docker_image: "img:latest".to_string(),
-            ..Default::default()
-        };
-        let cmd = build_docker_command(&config, &pkg, &[], &envvars, "", &[], false, "docker");
-        let cmd_str = cmd.join(" ");
-        assert!(cmd_str.contains("--env ENVTEST_XYZ"), "env var should be in docker cmd: {}", cmd_str);
+    fn test_expand_key_value_passthrough() {
+        let patterns = vec!["LANG=C".to_string()];
+        let result = expand_envvar_patterns(&patterns);
+        assert_eq!(result, vec!["LANG=C".to_string()]);
     }
 
     #[test]
-    fn test_strict_env_docker_only_allowlisted_vars() {
-        // In strict-env mode, only config+manifest envvars should be passed.
-        // No EnvGuard needed — just pass a fixed allowlist to build_docker_command.
+    fn test_expand_key_value_overrides_name() {
+        let _guard = crate::test_util::EnvGuard::set("LANG", "en_US.UTF-8");
+        let patterns = vec!["LANG".to_string(), "LANG=C".to_string()];
+        let result = expand_envvar_patterns(&patterns);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], "LANG=C");
+    }
+
+    #[test]
+    fn test_expand_name_overrides_key_value() {
+        let _guard = crate::test_util::EnvGuard::set("LANG", "en_US.UTF-8");
+        let patterns = vec!["LANG=C".to_string(), "LANG".to_string()];
+        let result = expand_envvar_patterns(&patterns);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], "LANG");
+    }
+
+    #[test]
+    fn test_expand_no_duplicate_keys() {
+        let _guard = crate::test_util::EnvGuard::set("TERM", "xterm");
+        let patterns = vec!["TERM".to_string(), "TERM".to_string()];
+        let result = expand_envvar_patterns(&patterns);
+        assert_eq!(result.iter().filter(|v| v.as_str() == "TERM").count(), 1);
+    }
+
+    #[test]
+    fn test_docker_passes_allowlisted_vars() {
         let allowlist = vec!["DISPLAY".to_string(), "LANG".to_string()];
         let config = BulkerConfig::test_default();
         let pkg = PackageCommand {
@@ -1213,9 +1311,7 @@ mod tests {
     }
 
     #[test]
-    fn test_apptainer_strict_env_has_cleanenv() {
-        // Set BULKER_STRICT_ENV so build_apptainer_command activates strict-env mode
-        let _guard = crate::test_util::EnvGuard::set("BULKER_STRICT_ENV", "1");
+    fn test_apptainer_always_has_cleanenv() {
         let mut config = BulkerConfig::test_default();
         config.bulker.apptainer_image_folder = Some("/tmp/sif".to_string());
         let pkg = PackageCommand {
@@ -1225,23 +1321,7 @@ mod tests {
         };
         let envvars = vec!["DISPLAY".to_string()];
         let cmd = build_apptainer_command(&config, &pkg, &[], &envvars, &[], false, "apptainer");
-        assert!(cmd.contains(&"--cleanenv".to_string()), "strict-env apptainer should have --cleanenv: {:?}", cmd);
-    }
-
-    #[test]
-    fn test_apptainer_normal_mode_no_cleanenv() {
-        // Ensure BULKER_STRICT_ENV is not set
-        let _guard = crate::test_util::EnvGuard::remove("BULKER_STRICT_ENV");
-        let mut config = BulkerConfig::test_default();
-        config.bulker.apptainer_image_folder = Some("/tmp/sif".to_string());
-        let pkg = PackageCommand {
-            command: "samtools".to_string(),
-            docker_image: "quay.io/biocontainers/samtools:1.9".to_string(),
-            ..Default::default()
-        };
-        let cmd = build_apptainer_command(&config, &pkg, &[], &[], &[], false, "apptainer");
-        assert!(!cmd.contains(&"--cleanenv".to_string()), "normal mode should NOT have --cleanenv: {:?}", cmd);
-        assert!(!cmd.iter().any(|a| a.starts_with("--env")), "normal mode should NOT have explicit --env flags: {:?}", cmd);
+        assert!(cmd.contains(&"--cleanenv".to_string()), "apptainer should always have --cleanenv: {:?}", cmd);
     }
 
     // ─── tmpdir auto-mount tests ────────────────────────────────────────
@@ -1276,8 +1356,6 @@ mod tests {
     #[test]
     fn test_tmpdir_appears_in_apptainer_command() {
         let _guard = crate::test_util::EnvGuard::remove("TMPDIR");
-        // SAFETY: already hold ENV_MUTEX via _guard above
-        unsafe { std::env::remove_var("BULKER_STRICT_ENV"); }
         let mut config = BulkerConfig::test_default();
         config.bulker.apptainer_image_folder = Some("/tmp/sif".to_string());
         let pkg = PackageCommand {
@@ -1292,12 +1370,8 @@ mod tests {
     }
 
     #[test]
-    fn test_apptainer_strict_env_passes_allowlisted_vars() {
-        // Use a single EnvGuard to set both vars. We set BULKER_STRICT_ENV and the
-        // test var in one call chain to avoid mutex deadlock.
-        let _guard = crate::test_util::EnvGuard::set("BULKER_STRICT_ENV", "1");
-        // SAFETY: already hold ENV_MUTEX via _guard above
-        unsafe { std::env::set_var("MY_TEST_VAR_APT", "testval"); }
+    fn test_apptainer_passes_allowlisted_vars() {
+        let _guard = crate::test_util::EnvGuard::set("MY_TEST_VAR_APT", "testval");
         let mut config = BulkerConfig::test_default();
         config.bulker.apptainer_image_folder = Some("/tmp/sif".to_string());
         let pkg = PackageCommand {
@@ -1307,11 +1381,10 @@ mod tests {
         };
         let envvars = vec!["MY_TEST_VAR_APT".to_string()];
         let cmd = build_apptainer_command(&config, &pkg, &[], &envvars, &[], false, "apptainer");
-        // Clean up the extra var before assertions (still holding lock)
-        unsafe { std::env::remove_var("MY_TEST_VAR_APT"); }
-        assert!(cmd.contains(&"--env".to_string()), "strict-env should pass allowlisted vars: {:?}", cmd);
+        assert!(cmd.contains(&"--env".to_string()), "should pass allowlisted vars: {:?}", cmd);
         assert!(cmd.contains(&"MY_TEST_VAR_APT=testval".to_string()), "should pass var=value: {:?}", cmd);
     }
+
 
     #[test]
     fn test_singularity_engine_uses_apptainer_command() {

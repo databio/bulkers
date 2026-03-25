@@ -29,12 +29,14 @@ pub fn run(matches: &ArgMatches) -> Result<()> {
     let key = matches.get_one::<String>("key").unwrap();
     let value = matches.get_one::<String>("value").unwrap();
 
+    if super::is_envvars_key(key) {
+        bail!("envvars management has moved to `bulker env add`. Use `bulker env add {}` instead.", value);
+    }
     if !super::is_list_key(key) {
         bail!("'{}' is not a list field. Use 'config set' instead.", key);
     }
 
     let list = match key.as_str() {
-        "envvars" => &mut config.bulker.envvars,
         "volumes" => &mut config.bulker.volumes,
         _ => unreachable!(),
     };

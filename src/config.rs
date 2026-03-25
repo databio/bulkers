@@ -39,6 +39,8 @@ pub struct BulkerSettings {
     #[serde(default = "default_system_volumes")]
     pub system_volumes: bool,
     #[serde(default)]
+    pub no_default_envvars: bool,
+    #[serde(default)]
     pub tool_args: Option<serde_yml::Value>,
     #[serde(default)]
     pub shell_prompt: Option<String>,
@@ -89,7 +91,7 @@ fn default_volumes() -> Vec<String> {
 }
 
 fn default_envvars() -> Vec<String> {
-    vec!["DISPLAY".to_string()]
+    Vec::new()
 }
 
 impl BulkerSettings {
@@ -209,9 +211,10 @@ impl BulkerConfig {
                 rcfile: "start.sh".to_string(),
                 rcfile_strict: "start_strict.sh".to_string(),
                 volumes: vec!["$HOME".to_string()],
-                envvars: vec!["DISPLAY".to_string()],
+                envvars: vec![],
                 host_network: true,
                 system_volumes: true,
+                no_default_envvars: false,
                 tool_args: None,
                 shell_prompt: None,
                 apptainer_image_folder: None,
@@ -243,6 +246,7 @@ impl Default for BulkerSettings {
             envvars: default_envvars(),
             host_network: default_host_network(),
             system_volumes: default_system_volumes(),
+            no_default_envvars: false,
             tool_args: None,
             shell_prompt: None,
             apptainer_image_folder: None,
@@ -488,7 +492,7 @@ mod tests {
         assert_eq!(config.bulker.rcfile, "start.sh");
         assert_eq!(config.bulker.rcfile_strict, "start_strict.sh");
         assert_eq!(config.bulker.volumes, vec!["$HOME"]);
-        assert_eq!(config.bulker.envvars, vec!["DISPLAY"]);
+        assert!(config.bulker.envvars.is_empty());
     }
 
     #[test]

@@ -322,57 +322,118 @@ fn test_config_add_remove() {
     let tmp = TempDir::new().unwrap();
     let config_path = init_config(&tmp);
 
-    // Add an envvar
+    // Add a volume via config add (envvars moved to `bulker env`)
     let output = bulker_cmd(tmp.path())
-        .args(["config", "add", "-c", config_path.to_str().unwrap(), "envvars", "MY_CUSTOM_VAR"])
+        .args(["config", "add", "-c", config_path.to_str().unwrap(), "volumes", "/data"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Added '/data' to volumes"), "unexpected output: {}", stdout);
+
+    // Verify it's there
+    let output = bulker_cmd(tmp.path())
+        .args(["config", "get", "-c", config_path.to_str().unwrap(), "volumes"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("/data"), "added vol not in volumes: {}", stdout);
+
+    // Add duplicate should skip
+    let output = bulker_cmd(tmp.path())
+        .args(["config", "add", "-c", config_path.to_str().unwrap(), "volumes", "/data"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("already in volumes"), "duplicate add should report already exists: {}", stdout);
+
+    // Remove it
+    let output = bulker_cmd(tmp.path())
+        .args(["config", "remove", "-c", config_path.to_str().unwrap(), "volumes", "/data"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Removed '/data' from volumes"), "unexpected output: {}", stdout);
+
+    // Verify it's gone
+    let output = bulker_cmd(tmp.path())
+        .args(["config", "get", "-c", config_path.to_str().unwrap(), "volumes"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!stdout.contains("/data"), "removed vol still in volumes: {}", stdout);
+
+    // Remove non-existent should not error
+    let output = bulker_cmd(tmp.path())
+        .args(["config", "remove", "-c", config_path.to_str().unwrap(), "volumes", "/nonexistent"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("not found in volumes"), "missing var should report not found: {}", stdout);
+
+    // config add envvars should redirect to bulker env
+    let output = bulker_cmd(tmp.path())
+        .args(["config", "add", "-c", config_path.to_str().unwrap(), "envvars", "MY_VAR"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "config add envvars should fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("bulker env add"), "should redirect to bulker env: {}", stderr);
+}
+
+#[test]
+fn test_env_add_remove() {
+    let tmp = TempDir::new().unwrap();
+    let config_path = init_config(&tmp);
+
+    // Add an envvar via bulker env add
+    let output = bulker_cmd(tmp.path())
+        .args(["env", "add", "-c", config_path.to_str().unwrap(), "MY_CUSTOM_VAR"])
         .output()
         .unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Added 'MY_CUSTOM_VAR' to envvars"), "unexpected output: {}", stdout);
 
-    // Verify it's there
-    let output = bulker_cmd(tmp.path())
-        .args(["config", "get", "-c", config_path.to_str().unwrap(), "envvars"])
-        .output()
-        .unwrap();
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("MY_CUSTOM_VAR"), "added var not in envvars: {}", stdout);
-
     // Add duplicate should skip
     let output = bulker_cmd(tmp.path())
-        .args(["config", "add", "-c", config_path.to_str().unwrap(), "envvars", "MY_CUSTOM_VAR"])
+        .args(["env", "add", "-c", config_path.to_str().unwrap(), "MY_CUSTOM_VAR"])
         .output()
         .unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("already in envvars"), "duplicate add should report already exists: {}", stdout);
 
+    // Set a KEY=VALUE
+    let output = bulker_cmd(tmp.path())
+        .args(["env", "set", "-c", config_path.to_str().unwrap(), "LANG=C"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Added 'LANG=C' to envvars"), "unexpected output: {}", stdout);
+
     // Remove it
     let output = bulker_cmd(tmp.path())
-        .args(["config", "remove", "-c", config_path.to_str().unwrap(), "envvars", "MY_CUSTOM_VAR"])
+        .args(["env", "remove", "-c", config_path.to_str().unwrap(), "MY_CUSTOM_VAR"])
         .output()
         .unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Removed 'MY_CUSTOM_VAR' from envvars"), "unexpected output: {}", stdout);
 
-    // Verify it's gone
+    // Show should work
     let output = bulker_cmd(tmp.path())
-        .args(["config", "get", "-c", config_path.to_str().unwrap(), "envvars"])
-        .output()
-        .unwrap();
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(!stdout.contains("MY_CUSTOM_VAR"), "removed var still in envvars: {}", stdout);
-
-    // Remove non-existent should not error
-    let output = bulker_cmd(tmp.path())
-        .args(["config", "remove", "-c", config_path.to_str().unwrap(), "envvars", "NONEXISTENT_VAR"])
+        .args(["env", "-c", config_path.to_str().unwrap()])
         .output()
         .unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("not found in envvars"), "missing var should report not found: {}", stdout);
+    assert!(stdout.contains("Default allowlist"), "env show should display defaults: {}", stdout);
+    assert!(stdout.contains("LANG=C"), "env show should include set value: {}", stdout);
 }
 
 #[test]

@@ -47,10 +47,10 @@ CRATE FORMAT:
                 .help("Strict mode: only crate commands available in PATH"),
         )
         .arg(
-            Arg::new("strict_env")
-                .long("strict-env")
+            Arg::new("host_env")
+                .long("host-env")
                 .action(ArgAction::SetTrue)
-                .help("Clean container environment: only pass envvars allowlist (config + manifest)"),
+                .help("Forward all host environment variables (overrides allowlist)"),
         )
         .arg(
             Arg::new("print_command")
@@ -109,8 +109,8 @@ pub fn run(matches: &ArgMatches) -> Result<()> {
         Some(p) => format!("export BULKERCFG=\"{}\"; ", p.display()),
         None => String::new(),
     };
-    let strict_env_export = if matches.get_flag("strict_env") {
-        "export BULKER_STRICT_ENV=1; "
+    let host_env_export = if matches.get_flag("host_env") {
+        "export BULKER_HOST_ENV=1; "
     } else {
         ""
     };
@@ -119,7 +119,7 @@ pub fn run(matches: &ArgMatches) -> Result<()> {
         result.path,
         crate_id,
         bulkercfg_export,
-        strict_env_export,
+        host_env_export,
         quoted_args.join(" ")
     );
 

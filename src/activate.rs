@@ -114,7 +114,7 @@ pub fn activate(
     cratelist: &[CrateVars],
     echo: bool,
     strict: bool,
-    strict_env: bool,
+    host_env: bool,
     prompt: bool,
     force: bool,
 ) -> Result<()> {
@@ -183,8 +183,8 @@ pub fn activate(
         if let Some(cp) = config_path {
             println!("export BULKERCFG=\"{}\"", cp.display());
         }
-        if strict_env {
-            println!("export BULKER_STRICT_ENV=1");
+        if host_env {
+            println!("export BULKER_HOST_ENV=1");
         }
         println!("export BULKERPATH=\"{}\"", newpath);
         println!("export BULKER_SHIMDIR=\"{}\"", shimdir);
@@ -203,8 +203,8 @@ pub fn activate(
         if let Some(cp) = config_path {
             std::env::set_var("BULKERCFG", cp.to_string_lossy().as_ref());
         }
-        if strict_env {
-            std::env::set_var("BULKER_STRICT_ENV", "1");
+        if host_env {
+            std::env::set_var("BULKER_HOST_ENV", "1");
         }
         std::env::set_var("BULKERPATH", newpath);
         std::env::set_var("BULKER_SHIMDIR", shimdir);
@@ -213,14 +213,6 @@ pub fn activate(
         }
         std::env::set_var("BULKERSHELLRC", &shell_rc);
 
-        // In strict mode, preserve explicitly listed envvars
-        if strict {
-            for var in &config.bulker.envvars {
-                if let Ok(val) = std::env::var(var) {
-                    std::env::set_var(var, &val);
-                }
-            }
-        }
     }
 
     // Build shell command

@@ -74,6 +74,8 @@ pub struct PackageCommand {
     #[serde(default)]
     pub no_default_volumes: bool,
     #[serde(default)]
+    pub no_default_envvars: bool,
+    #[serde(default)]
     pub workdir: Option<String>,
 }
 
