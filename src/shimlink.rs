@@ -531,24 +531,10 @@ pub fn create_shimlink_dir(manifest: &Manifest, dir: &Path) -> Result<()> {
         })?;
     }
 
-    // Symlink host commands to the actual host binary
-    for host_cmd in &manifest.manifest.host_commands {
-        if let Ok(output) = std::process::Command::new("which")
-            .arg(host_cmd)
-            .output()
-        {
-            if output.status.success() {
-                let host_path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                let link_path = dir.join(host_cmd);
-                let _ = std::fs::remove_file(&link_path);
-                std::os::unix::fs::symlink(&host_path, &link_path).with_context(|| {
-                    format!("Failed to symlink host command: {} -> {}", host_cmd, host_path)
-                })?;
-            } else {
-                log::warn!("Host command not found: {}", host_cmd);
-            }
-        }
-    }
+    // Host commands are not shimlinked — they remain on PATH naturally.
+    // Creating symlinks or wrappers for host commands (especially python3)
+    // breaks virtual environment detection, because CPython resolves the
+    // full symlink chain and loses track of pyvenv.cfg.
 
     Ok(())
 }
