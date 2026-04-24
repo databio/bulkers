@@ -170,6 +170,28 @@ pub fn build_docker_command(
         cmd.push("-i".to_string());
     }
 
+    // Emit --entrypoint flag when the manifest specifies one (non-interactive only).
+    // In interactive mode, we want bash, not the pinned entrypoint.
+    let use_entrypoint = !interactive
+        && pkg.entrypoint.as_deref().map(|s| !s.is_empty()).unwrap_or(false);
+    if use_entrypoint {
+        cmd.push(format!("--entrypoint={}", pkg.entrypoint.as_ref().unwrap()));
+    }
+
+    // Deprecation warnings
+    if docker_args.contains("--entrypoint") {
+        log::warn!(
+            "'{}': `--entrypoint` in docker_args is deprecated; use the `entrypoint` manifest field instead",
+            pkg.command
+        );
+    }
+    if pkg.docker_command.as_deref().map(|s| !s.is_empty()).unwrap_or(false) {
+        log::warn!(
+            "'{}': `docker_command` is deprecated; use the `entrypoint` manifest field instead",
+            pkg.command
+        );
+    }
+
     // Strip -t/--tty from docker_args — TTY is now auto-detected
     if !docker_args.is_empty() {
         let cleaned_args = strip_tty_flag(docker_args);
@@ -243,6 +265,8 @@ pub fn build_docker_command(
     if interactive {
         // Shell wrapper: launch bash
         cmd.push("bash".to_string());
+    } else if use_entrypoint {
+        // --entrypoint already emitted; args go straight to the overridden entrypoint.
     } else if let Some(ref dc) = pkg.docker_command {
         if !dc.is_empty() {
             cmd.push(dc.clone());
@@ -376,12 +400,24 @@ pub fn build_apptainer_command(
     // Command to run
     if interactive {
         cmd.push("bash".to_string());
+    } else if let Some(ref ep) = pkg.entrypoint {
+        if !ep.is_empty() {
+            cmd.push(ep.clone());
+        }
     } else if let Some(ref ac) = pkg.apptainer_command {
         if !ac.is_empty() {
+            log::warn!(
+                "'{}': `apptainer_command`/`singularity_command` is deprecated; use the `entrypoint` manifest field instead",
+                pkg.command
+            );
             cmd.push(ac.clone());
         }
     } else if let Some(ref dc) = pkg.docker_command {
         if !dc.is_empty() {
+            log::warn!(
+                "'{}': `docker_command` as apptainer fallback is deprecated; use the `entrypoint` manifest field instead",
+                pkg.command
+            );
             cmd.push(dc.clone());
         }
     } else {
@@ -957,34 +993,12 @@ mod tests {
                     PackageCommand {
                         command: "samtools".to_string(),
                         docker_image: "samtools:latest".to_string(),
-                        docker_command: None,
-                        docker_args: None,
-                        dockerargs: None,
-                        apptainer_args: None,
-                        apptainer_command: None,
-                        volumes: vec![],
-                        envvars: vec![],
-                        no_user: false,
-                        no_network: false,
-                        no_default_volumes: false,
-                        no_default_envvars: false,
-                        workdir: None,
+                        ..Default::default()
                     },
                     PackageCommand {
                         command: "bcftools".to_string(),
                         docker_image: "bcftools:latest".to_string(),
-                        docker_command: None,
-                        docker_args: None,
-                        dockerargs: None,
-                        apptainer_args: None,
-                        apptainer_command: None,
-                        volumes: vec![],
-                        envvars: vec![],
-                        no_user: false,
-                        no_network: false,
-                        no_default_volumes: false,
-                        no_default_envvars: false,
-                        workdir: None,
+                        ..Default::default()
                     },
                 ],
                 host_commands: vec![],
@@ -1396,6 +1410,89 @@ mod tests {
         let sif_arg = cmd.iter().find(|a| a.contains(".sif")).unwrap();
         assert!(sif_arg.starts_with("/data/sif/"), "SIF path should use configured folder: {}", sif_arg);
         assert!(!cmd.contains(&"--rm".to_string()), "should not have docker --rm flag: {:?}", cmd);
+    }
+
+    // ─── entrypoint field tests ──────────────────────────────────────────
+
+    #[test]
+    fn test_docker_entrypoint_set_emits_flag_and_skips_command() {
+        let config = BulkerConfig::test_default();
+        let pkg = PackageCommand {
+            command: "jq".to_string(),
+            docker_image: "linuxserver/yq".to_string(),
+            entrypoint: Some("jq".to_string()),
+            ..Default::default()
+        };
+        let cmd = build_docker_command(&config, &pkg, &[], &[], "", &["--version".to_string()], false, "docker");
+        assert!(
+            cmd.contains(&"--entrypoint=jq".to_string()),
+            "expected --entrypoint=jq flag, got {:?}", cmd
+        );
+        // Nothing appended after the image except user args
+        let image_idx = cmd.iter().position(|a| a == "linuxserver/yq").unwrap();
+        assert_eq!(cmd[image_idx + 1..], vec!["--version".to_string()]);
+    }
+
+    #[test]
+    fn test_docker_entrypoint_unset_falls_back_to_command() {
+        let config = BulkerConfig::test_default();
+        let pkg = PackageCommand {
+            command: "samtools".to_string(),
+            docker_image: "samtools:1.9".to_string(),
+            ..Default::default()
+        };
+        let cmd = build_docker_command(&config, &pkg, &[], &[], "", &[], false, "docker");
+        assert!(!cmd.iter().any(|a| a.starts_with("--entrypoint")));
+        let image_idx = cmd.iter().position(|a| a == "samtools:1.9").unwrap();
+        assert_eq!(cmd[image_idx + 1], "samtools");
+    }
+
+    #[test]
+    fn test_apptainer_entrypoint_set_used_as_exec_command() {
+        let mut config = BulkerConfig::test_default();
+        config.bulker.apptainer_image_folder = Some("/tmp/sif".to_string());
+        let pkg = PackageCommand {
+            command: "jq".to_string(),
+            docker_image: "linuxserver/yq".to_string(),
+            entrypoint: Some("jq".to_string()),
+            // Deprecated fields present — should be ignored because entrypoint wins.
+            apptainer_command: Some("xq".to_string()),
+            docker_command: Some("yq".to_string()),
+            ..Default::default()
+        };
+        let cmd = build_apptainer_command(&config, &pkg, &[], &[], &["--version".to_string()], false, "apptainer");
+        let sif_idx = cmd.iter().position(|a| a.ends_with(".sif")).unwrap();
+        assert_eq!(cmd[sif_idx + 1], "jq");
+        assert_eq!(cmd[sif_idx + 2], "--version");
+    }
+
+    #[test]
+    fn test_apptainer_entrypoint_unset_falls_back_to_command() {
+        let mut config = BulkerConfig::test_default();
+        config.bulker.apptainer_image_folder = Some("/tmp/sif".to_string());
+        let pkg = PackageCommand {
+            command: "samtools".to_string(),
+            docker_image: "samtools:1.9".to_string(),
+            ..Default::default()
+        };
+        let cmd = build_apptainer_command(&config, &pkg, &[], &[], &[], false, "apptainer");
+        let sif_idx = cmd.iter().position(|a| a.ends_with(".sif")).unwrap();
+        assert_eq!(cmd[sif_idx + 1], "samtools");
+    }
+
+    #[test]
+    fn test_docker_entrypoint_ignored_in_interactive_mode() {
+        let config = BulkerConfig::test_default();
+        let pkg = PackageCommand {
+            command: "jq".to_string(),
+            docker_image: "linuxserver/yq".to_string(),
+            entrypoint: Some("jq".to_string()),
+            ..Default::default()
+        };
+        let cmd = build_docker_command(&config, &pkg, &[], &[], "", &[], true, "docker");
+        assert!(!cmd.iter().any(|a| a.starts_with("--entrypoint")),
+            "interactive mode should not emit --entrypoint: {:?}", cmd);
+        assert!(cmd.contains(&"bash".to_string()));
     }
 
     #[test]

@@ -55,6 +55,13 @@ fn main() -> Result<()> {
     // Shimlink dispatch: if invoked as a symlink (argv[0] != "bulker"),
     // dispatch directly to the container command without clap parsing.
     if let Some(cmd_name) = shimlink::detect_shimlink_invocation() {
+        // SAFETY: called before any threads are spawned, single-threaded context
+        unsafe {
+            if std::env::var("RUST_LOG").is_err() {
+                std::env::set_var("RUST_LOG", "info");
+            }
+        }
+        let _ = env_logger::try_init();
         let args: Vec<String> = std::env::args().skip(1).collect();
         return shimlink::shimlink_exec(&cmd_name, &args);
     }

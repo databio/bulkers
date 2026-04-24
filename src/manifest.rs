@@ -53,6 +53,13 @@ pub struct ManifestInner {
 pub struct PackageCommand {
     pub command: String,
     pub docker_image: String,
+    /// Binary to run inside the container. When set, bulker emits
+    /// `--entrypoint <entrypoint>` under docker and `<entrypoint>` as the
+    /// apptainer exec command. When unset, both engines fall back to
+    /// `pkg.command`. Replaces the deprecated `docker_command`,
+    /// `apptainer_command`, `singularity_command` chain.
+    #[serde(default)]
+    pub entrypoint: Option<String>,
     #[serde(default)]
     pub docker_command: Option<String>,
     #[serde(default)]
