@@ -126,10 +126,12 @@ pub fn activate(
     let result = get_new_path(config, cratelist, strict, force)?;
     let newpath = &result.path;
     let shimdir = &result.shimdir;
-    // Use the first crate's display_name for BULKERCRATE (shimlink needs this to find the manifest)
-    let crate_id = cratelist.first()
+    // Record ALL activated crates so the shim resolver can search every one.
+    let crate_id = cratelist
+        .iter()
         .map(|cv| cv.display_name())
-        .unwrap_or_default();
+        .collect::<Vec<_>>()
+        .join(",");
     let crate_name = crate_display_name(cratelist);
 
     // Resolve shell

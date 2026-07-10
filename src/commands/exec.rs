@@ -102,9 +102,12 @@ pub fn run(matches: &ArgMatches) -> Result<()> {
         .map(|a| shell_escape::escape(std::borrow::Cow::Borrowed(a.as_str())).to_string())
         .collect();
 
-    let crate_id = cratelist.first()
+    // Record ALL crates so the shim resolver can search every one.
+    let crate_id = cratelist
+        .iter()
         .map(|cv| cv.display_name())
-        .unwrap_or_default();
+        .collect::<Vec<_>>()
+        .join(",");
 
     let bulkercfg_export = match &config_path {
         Some(p) => format!("export BULKERCFG=\"{}\"; ", p.display()),

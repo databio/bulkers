@@ -8,7 +8,7 @@ use std::io::IsTerminal;
 use std::path::Path;
 
 use crate::config::{BulkerConfig, expand_path, load_config};
-use crate::manifest::{CrateVars, Manifest, PackageCommand, parse_registry_path};
+use crate::manifest::{CrateVars, Manifest, PackageCommand, parse_registry_paths};
 use crate::process;
 
 // ─── argv[0] detection ───────────────────────────────────────────────────────
@@ -43,9 +43,9 @@ pub fn shimlink_exec(command_name: &str, args: &[String]) -> Result<()> {
         .context("$BULKERCRATE not set. Are you in an activated bulker environment?")?;
     let (config, _config_path) = load_config(None)?;
 
-    // 2. Find command in crate manifest or its imports
-    let cratevars = parse_registry_path(&crate_id, &config.bulker.default_namespace)?;
-    let pkg = find_command_in_crate_with_imports(&config, &cratevars, actual_command)?;
+    // 2. Find command across all activated crates and their imports
+    let cratevars = parse_registry_paths(&crate_id, &config.bulker.default_namespace)?;
+    let pkg = find_command_in_crates_with_imports(&config, &cratevars, actual_command)?;
 
     // 3. Resolve argument paths and auto-mount directories
     let (resolved_args, auto_mount_dirs) = resolve_arg_paths(args);
@@ -496,13 +496,13 @@ pub fn resolve_arg_paths(args: &[String]) -> (Vec<String>, Vec<String>) {
 
 // ─── command lookup with imports ─────────────────────────────────────────────
 
-/// Find a command by searching the primary crate manifest and all its imports.
-fn find_command_in_crate_with_imports(
+/// Find a command by searching all activated crates and their imports.
+fn find_command_in_crates_with_imports(
     config: &BulkerConfig,
-    primary_cv: &CrateVars,
+    primary_cvs: &[CrateVars],
     command_name: &str,
 ) -> Result<PackageCommand> {
-    let all_crates = crate::imports::resolve_cratevars_with_imports(config, &[primary_cv.clone()])?;
+    let all_crates = crate::imports::resolve_cratevars_with_imports(config, primary_cvs)?;
 
     for cv in &all_crates {
         if let Some(manifest) = crate::manifest_cache::load_cached(cv)? {
@@ -512,10 +512,15 @@ fn find_command_in_crate_with_imports(
         }
     }
 
+    let names = primary_cvs
+        .iter()
+        .map(|c| c.display_name())
+        .collect::<Vec<_>>()
+        .join(", ");
     bail!(
-        "Command '{}' not found in crate '{}' or its imports",
+        "Command '{}' not found in activated crates '{}' or their imports",
         command_name,
-        primary_cv.display_name()
+        names
     )
 }
 
@@ -1154,14 +1159,80 @@ mod tests {
         crate::manifest_cache::save_to_cache(&parent_cv, &parent_manifest).unwrap();
 
         // Look up "cat" starting from the parent crate — should find it in the import
-        let pkg = find_command_in_crate_with_imports(&config, &parent_cv, "cat").unwrap();
+        let pkg = find_command_in_crates_with_imports(&config, &[parent_cv.clone()], "cat").unwrap();
         assert_eq!(pkg.command, "cat");
 
         // Also verify "samtools" is found in the primary crate
-        let pkg2 = find_command_in_crate_with_imports(&config, &parent_cv, "samtools").unwrap();
+        let pkg2 = find_command_in_crates_with_imports(&config, &[parent_cv], "samtools").unwrap();
         assert_eq!(pkg2.command, "samtools");
 
         // EnvGuard restores XDG_CONFIG_HOME on drop
+    }
+
+    #[test]
+    fn test_find_command_across_multiple_activated_crates() {
+        let tmpdir = tempfile::tempdir().unwrap();
+        let _guard = crate::test_util::EnvGuard::set("XDG_CONFIG_HOME", tmpdir.path());
+
+        let config = BulkerConfig::test_default();
+
+        // Crate A: unique command "mkdir"; no import relationship with crate B
+        let crate_a_cv = CrateVars {
+            namespace: "test".to_string(),
+            crate_name: "multi_a_shimtest".to_string(),
+            tag: "default".to_string(),
+        };
+        let manifest_a = Manifest {
+            manifest: ManifestInner {
+                name: Some("multi_a".to_string()),
+                version: None,
+                commands: vec![PackageCommand {
+                    command: "mkdir".to_string(),
+                    docker_image: "alpine:latest".to_string(),
+                    ..make_empty_pkg()
+                }],
+                host_commands: vec![],
+                imports: vec![],
+            },
+        };
+        crate::manifest_cache::save_to_cache(&crate_a_cv, &manifest_a).unwrap();
+
+        // Crate B: unique command "bowtie2-build"
+        let crate_b_cv = CrateVars {
+            namespace: "test".to_string(),
+            crate_name: "multi_b_shimtest".to_string(),
+            tag: "default".to_string(),
+        };
+        let manifest_b = Manifest {
+            manifest: ManifestInner {
+                name: Some("multi_b".to_string()),
+                version: None,
+                commands: vec![PackageCommand {
+                    command: "bowtie2-build".to_string(),
+                    docker_image: "bowtie2:latest".to_string(),
+                    ..make_empty_pkg()
+                }],
+                host_commands: vec![],
+                imports: vec![],
+            },
+        };
+        crate::manifest_cache::save_to_cache(&crate_b_cv, &manifest_b).unwrap();
+
+        // Both crates' unique commands must resolve when both are activated
+        let cvs = vec![crate_a_cv.clone(), crate_b_cv.clone()];
+        assert_eq!(
+            find_command_in_crates_with_imports(&config, &cvs, "mkdir").unwrap().command,
+            "mkdir"
+        );
+        assert_eq!(
+            find_command_in_crates_with_imports(&config, &cvs, "bowtie2-build").unwrap().command,
+            "bowtie2-build"
+        );
+
+        // Reversed order must also resolve both
+        let cvs_rev = vec![crate_b_cv, crate_a_cv];
+        assert!(find_command_in_crates_with_imports(&config, &cvs_rev, "mkdir").is_ok());
+        assert!(find_command_in_crates_with_imports(&config, &cvs_rev, "bowtie2-build").is_ok());
     }
 
     // ─── strip_tty_flag tests ────────────────────────────────────────────────
