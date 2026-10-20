@@ -589,3 +589,76 @@ fn test_activate_strict_echo_no_host_path() {
     let path_line = stdout.lines().find(|l| l.starts_with("export PATH=")).unwrap();
     assert!(!path_line.contains(":/"), "strict PATH should not contain original PATH segments: {}", path_line);
 }
+
+fn digest_json(tmp: &TempDir, cfg: &std::path::Path, extra: &[&str]) -> serde_json::Value {
+    let mut args = vec!["crate", "digest", "-c", cfg.to_str().unwrap(), "bulker/test-crate:1.0.0", "--json"];
+    args.extend_from_slice(extra);
+    let output = bulker_cmd(tmp.path()).args(&args).output().expect("failed to run crate digest");
+    assert!(output.status.success(), "digest --json failed: {}\n{}",
+        String::from_utf8_lossy(&output.stderr), String::from_utf8_lossy(&output.stdout));
+    serde_json::from_slice(&output.stdout).expect("stdout is not valid JSON")
+}
+
+#[test]
+fn test_crate_digest_json() {
+    let tmp = TempDir::new().unwrap();
+    let cfg = init_config(&tmp);
+    install_test_crate(&tmp, &cfg);
+
+    let plain = bulker_cmd(tmp.path())
+        .args(["crate", "digest", "-c", cfg.to_str().unwrap(), "bulker/test-crate:1.0.0"])
+        .output().unwrap();
+    let plain_digest = String::from_utf8_lossy(&plain.stdout).trim().to_string();
+
+    let v = digest_json(&tmp, &cfg, &[]);
+    assert_eq!(v["crate"], "bulker/test-crate:1.0.0");
+    assert_eq!(v["crate_manifest_digest"], plain_digest.as_str());
+    assert!(v["crate_image_digest"].is_null());
+    let cmds = v["commands"].as_array().unwrap();
+    assert_eq!(cmds.len(), 2);
+    assert_eq!(cmds[0]["command"], "cowsay");
+    assert_eq!(cmds[0]["image"], "nsheff/cowsay");
+    assert_eq!(cmds[1]["command"], "fortune");
+    assert_eq!(cmds[1]["image"], "nsheff/fortune");
+    for c in cmds {
+        assert!(!c["pair_digest"].as_str().unwrap().is_empty());
+        assert!(c["oci_digest"].is_null());
+    }
+}
+
+#[test]
+fn test_crate_digest_json_uses_image_sidecar() {
+    let tmp = TempDir::new().unwrap();
+    let cfg = init_config(&tmp);
+    install_test_crate(&tmp, &cfg);
+    let dir = tmp.path().join("bulker/manifests/bulker/test-crate/1.0.0");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("crate-image-digest"), "sha512t24u-fake").unwrap();
+
+    let v = digest_json(&tmp, &cfg, &[]);
+    assert_eq!(v["crate_image_digest"], "sha512t24u-fake");
+    for c in v["commands"].as_array().unwrap() {
+        assert!(c["oci_digest"].is_null());
+    }
+}
+
+#[test]
+fn test_crate_digest_json_not_cached() {
+    let tmp = TempDir::new().unwrap();
+    let cfg = init_config(&tmp);
+    let output = bulker_cmd(tmp.path())
+        .args(["crate", "digest", "-c", cfg.to_str().unwrap(), "bulker/nope:1.0.0", "--json"])
+        .output().unwrap();
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty(), "stdout: {}", String::from_utf8_lossy(&output.stdout));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("is not cached"));
+}
+
+#[test]
+fn test_crate_digest_json_ignores_verbose() {
+    let tmp = TempDir::new().unwrap();
+    let cfg = init_config(&tmp);
+    install_test_crate(&tmp, &cfg);
+    let v = digest_json(&tmp, &cfg, &["--verbose"]);
+    assert_eq!(v["crate"], "bulker/test-crate:1.0.0");
+}

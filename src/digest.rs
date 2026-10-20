@@ -353,6 +353,53 @@ impl ManifestComparison {
 }
 
 // ---------------------------------------------------------------------------
+// JSON serialization for `crate digest --json`
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, serde::Serialize, PartialEq)]
+pub struct CommandDigestReport {
+    pub command: String,
+    pub image: String,
+    pub pair_digest: String,
+    pub oci_digest: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, PartialEq)]
+pub struct CrateDigestReport {
+    #[serde(rename = "crate")]
+    pub crate_name: String,
+    pub crate_manifest_digest: String,
+    pub crate_image_digest: Option<String>,
+    pub commands: Vec<CommandDigestReport>,
+}
+
+/// Build the --json report. Pure: no network, no filesystem.
+/// `oci_digests` is None when --resolve was not requested.
+/// `crate_image_digest` is the final chosen value (computed or sidecar).
+pub fn crate_digest_report(
+    crate_name: &str,
+    manifest_result: &CrateDigestResult,
+    crate_image_digest: Option<String>,
+    oci_digests: Option<&HashMap<String, String>>,
+) -> CrateDigestReport {
+    CrateDigestReport {
+        crate_name: crate_name.to_string(),
+        crate_manifest_digest: manifest_result.digest.clone(),
+        crate_image_digest,
+        commands: manifest_result
+            .pair_digests
+            .iter()
+            .map(|(cmd, img, pd)| CommandDigestReport {
+                command: cmd.clone(),
+                image: img.clone(),
+                pair_digest: pd.clone(),
+                oci_digest: oci_digests.and_then(|m| m.get(img).cloned()),
+            })
+            .collect(),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -416,6 +463,54 @@ mod tests {
                 imports: vec![],
             },
         }
+    }
+
+    #[test]
+    fn test_crate_digest_report_unresolved() {
+        let m = make_test_manifest(vec![("samtools", "quay.io/samtools:1.9"), ("bwa", "quay.io/bwa:0.7")]);
+        let r = crate_manifest_digest(&m);
+        let rep = crate_digest_report("ns/test:1", &r, None, None);
+        assert_eq!(rep.crate_name, "ns/test:1");
+        assert_eq!(rep.crate_manifest_digest, r.digest);
+        assert!(rep.crate_image_digest.is_none());
+        assert_eq!(rep.commands.len(), 2);
+        assert_eq!(rep.commands[0].command, "samtools");
+        assert_eq!(rep.commands[1].command, "bwa");
+        for (c, (_, _, pd)) in rep.commands.iter().zip(&r.pair_digests) {
+            assert_eq!(&c.pair_digest, pd);
+            assert!(c.oci_digest.is_none());
+        }
+    }
+
+    #[test]
+    fn test_crate_digest_report_resolved() {
+        let m = make_test_manifest(vec![("samtools", "quay.io/samtools:1.9"), ("bwa", "quay.io/bwa:0.7")]);
+        let r = crate_manifest_digest(&m);
+        let mut oci = HashMap::new();
+        oci.insert("quay.io/samtools:1.9".to_string(), "sha256:abc".to_string());
+        let rep = crate_digest_report("ns/test:1", &r, Some("img-digest".to_string()), Some(&oci));
+        assert_eq!(rep.crate_image_digest.as_deref(), Some("img-digest"));
+        assert_eq!(rep.commands[0].oci_digest.as_deref(), Some("sha256:abc"));
+        assert!(rep.commands[1].oci_digest.is_none());
+    }
+
+    #[test]
+    fn test_crate_digest_report_json_shape() {
+        let m = make_test_manifest(vec![("samtools", "quay.io/samtools:1.9")]);
+        let r = crate_manifest_digest(&m);
+        let rep = crate_digest_report("ns/test:1", &r, None, None);
+        let v = serde_json::to_value(&rep).unwrap();
+        let obj = v.as_object().unwrap();
+        let mut keys: Vec<&str> = obj.keys().map(|k| k.as_str()).collect();
+        keys.sort();
+        assert_eq!(keys, vec!["commands", "crate", "crate_image_digest", "crate_manifest_digest"]);
+        assert_eq!(obj["crate_image_digest"], Value::Null);
+        let cmd = obj["commands"][0].as_object().unwrap();
+        let mut ck: Vec<&str> = cmd.keys().map(|k| k.as_str()).collect();
+        ck.sort();
+        assert_eq!(ck, vec!["command", "image", "oci_digest", "pair_digest"]);
+        assert_eq!(cmd["oci_digest"], Value::Null);
+        assert!(serde_json::to_string(&rep).unwrap().starts_with("{\"crate\":"));
     }
 
     #[test]

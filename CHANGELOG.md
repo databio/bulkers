@@ -1,5 +1,19 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- `bulker crate digest <crate> --json` prints one JSON object with `crate`,
+  `crate_manifest_digest`, `crate_image_digest`, and `commands` (each with
+  `command`, `image`, `pair_digest`, `oci_digest`). Image digests are `null`
+  unless `--resolve` succeeds or a cached image digest exists.
+
+### Changed
+
+- `bulker crate digest --verbose --resolve` now re-resolves image digests even
+  when a cached image digest exists.
+
 ## [0.0.16] - 2026-07-10
 
 ### Fixed

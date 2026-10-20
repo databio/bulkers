@@ -80,6 +80,7 @@ bulker crate uninstall <name>     # remove crate from disk and config
 bulker crate update [name]        # re-fetch and rebuild crate(s)
 bulker crate list                 # list installed crates
 bulker crate inspect <name>       # show commands available in a crate
+bulker crate digest <name> [--json] [--resolve]  # content digests for provenance (JSON for scripts)
 ```
 
 ### Configuration
@@ -138,6 +139,25 @@ bulker exec -s bulker/demo -- cowsay hi
 ```
 
 `bulker exec` is a binary command that works everywhere — CI pipelines, cron jobs, subprocess calls, AI agent tool use. No shell function or `eval` required.
+
+To record the exact environment a tool ran in, `bulker crate digest <crate> --json` prints one machine-readable object:
+
+```bash
+bulker crate digest databio/pepatac:1.0.13 --json
+```
+
+```json
+{
+  "crate": "databio/pepatac:1.0.13",
+  "crate_manifest_digest": "<sha512t24u>",
+  "crate_image_digest": null,
+  "commands": [
+    {"command": "samtools", "image": "quay.io/biocontainers/samtools:1.14", "pair_digest": "<sha512t24u>", "oci_digest": null}
+  ]
+}
+```
+
+`crate_image_digest` and each `oci_digest` are `null` unless you pass `--resolve` (needs network) or a prior resolve already cached the image digest. Errors go to stderr with a nonzero exit, and stdout stays empty.
 
 ## Environment variable modes
 
