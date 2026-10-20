@@ -153,11 +153,14 @@ bulker crate digest databio/pepatac:1.0.13 --json
   "crate_image_digest": null,
   "commands": [
     {"command": "samtools", "image": "quay.io/biocontainers/samtools:1.14", "pair_digest": "<sha512t24u>", "oci_digest": null}
-  ]
+  ],
+  "imports": ["bulker/alpine:default"]
 }
 ```
 
-`crate_image_digest` and each `oci_digest` are `null` unless you pass `--resolve` (needs network) or a prior resolve already cached the image digest. Errors go to stderr with a nonzero exit, and stdout stays empty.
+`crate_image_digest` and each `oci_digest` are `null` unless you pass `--resolve` (needs network) or a prior resolve already cached the image digest. With `--resolve`, `crate_image_digest` is `null` if any image could not be resolved; the cached value is not used.
+
+The digests and `commands` cover only the crate's own commands. Imported crates are listed in `imports`, exactly as written in the manifest, so you can digest each one separately. Errors go to stderr with a nonzero exit, and stdout stays empty.
 
 ## Environment variable modes
 

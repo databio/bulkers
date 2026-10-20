@@ -99,6 +99,19 @@ pub fn save_to_cache(cv: &CrateVars, manifest: &Manifest) -> Result<()> {
     let sidecar = path.parent().unwrap().join("crate-manifest-digest");
     let _ = std::fs::write(&sidecar, &result.digest);
 
+    // Any crate-image-digest belongs to the previous manifest; drop it so a
+    // stale value is never reported. Callers that resolve images write a fresh one.
+    let image_sidecar = path.parent().unwrap().join("crate-image-digest");
+    match std::fs::remove_file(&image_sidecar) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => {
+            return Err(e).with_context(|| {
+                format!("Failed to remove stale digest sidecar: {}", image_sidecar.display())
+            });
+        }
+    }
+
     Ok(())
 }
 
@@ -363,6 +376,28 @@ mod tests {
         assert_eq!(loaded.manifest.commands[0].command, "cowsay");
         assert_eq!(loaded.manifest.host_commands, vec!["ls"]);
 
+    }
+
+    #[test]
+    fn test_save_to_cache_removes_stale_image_digest() {
+        let tmpdir = tempfile::tempdir().unwrap();
+        let _guard = crate::test_util::EnvGuard::set("XDG_CONFIG_HOME", tmpdir.path());
+
+        let cv = CrateVars {
+            namespace: "test".to_string(),
+            crate_name: "stale".to_string(),
+            tag: "default".to_string(),
+        };
+        let manifest = crate::test_util::make_manifest_with_imports("stale", vec![]);
+
+        save_to_cache(&cv, &manifest).unwrap();
+        write_digest_sidecar(&cv, "crate-image-digest", "old-image-digest").unwrap();
+        assert_eq!(read_digest_sidecar(&cv, "crate-image-digest").as_deref(), Some("old-image-digest"));
+
+        // Re-writing the manifest (update / re-fetch) must drop the old image digest
+        save_to_cache(&cv, &manifest).unwrap();
+        assert_eq!(read_digest_sidecar(&cv, "crate-image-digest"), None);
+        assert!(read_digest_sidecar(&cv, "crate-manifest-digest").is_some());
     }
 
     #[test]

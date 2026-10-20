@@ -65,7 +65,9 @@ pub fn run(matches: &ArgMatches) -> Result<()> {
 
     if json {
         let (img, oci) = image_digests(&cv, &manifest, resolve)?;
-        let report = digest::crate_digest_report(&cv.display_name(), &result, img, oci.as_ref());
+        let report = digest::crate_digest_report(
+            &cv.display_name(), &result, img, oci.as_ref(), &manifest.manifest.imports,
+        );
         let out = serde_json::to_string_pretty(&report)?;
         println!("{}", out);
         return Ok(());
@@ -100,6 +102,9 @@ pub fn run(matches: &ArgMatches) -> Result<()> {
 type ImageDigests = (Option<String>, Option<HashMap<String, String>>);
 
 /// Returns (crate_image_digest, oci_digests_if_resolved).
+/// Without `resolve`, the cached sidecar is used. With `resolve`, only the
+/// freshly computed value is used (None if any image failed to resolve), so a
+/// stale sidecar is never reported next to fresh per-command OCI digests.
 fn image_digests(
     cv: &CrateVars,
     manifest: &Manifest,
@@ -115,7 +120,7 @@ fn image_digests(
             manifest_cache::write_digest_sidecar(cv, "crate-image-digest", &r.digest)?;
             Some(r.digest)
         }
-        None => manifest_cache::read_digest_sidecar(cv, "crate-image-digest"),
+        None => None,
     };
     Ok((img, Some(oci)))
 }

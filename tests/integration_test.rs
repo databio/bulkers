@@ -662,3 +662,90 @@ fn test_crate_digest_json_ignores_verbose() {
     let v = digest_json(&tmp, &cfg, &["--verbose"]);
     assert_eq!(v["crate"], "bulker/test-crate:1.0.0");
 }
+
+/// Install a custom manifest file (crate identity comes from its name/version).
+fn install_custom_crate(tmp: &TempDir, cfg: &std::path::Path, manifest: &str) {
+    let path = tmp.path().join("custom_manifest.yaml");
+    fs::write(&path, manifest).unwrap();
+    let output = bulker_cmd(tmp.path())
+        .args(["crate", "install", "-c", cfg.to_str().unwrap(), path.to_str().unwrap()])
+        .output().unwrap();
+    assert!(output.status.success(), "crate install failed: {}", String::from_utf8_lossy(&output.stderr));
+}
+
+#[test]
+fn test_crate_digest_resolve_partial_ignores_stale_sidecar() {
+    // One image pins a digest (resolves offline), the other points at a closed
+    // local port (fails fast, no external network). The stale sidecar must not leak.
+    let tmp = TempDir::new().unwrap();
+    let cfg = init_config(&tmp);
+    install_custom_crate(&tmp, &cfg, r#"manifest:
+  name: test-crate
+  version: 1.0.0
+  commands:
+  - command: pinned
+    docker_image: nsheff/cowsay@sha256:aaaa
+  - command: broken
+    docker_image: localhost:1/nope:1
+"#);
+    let dir = tmp.path().join("bulker/manifests/bulker/test-crate/1.0.0");
+    fs::write(dir.join("crate-image-digest"), "stale-image-digest").unwrap();
+
+    let v = digest_json(&tmp, &cfg, &["--resolve"]);
+    assert!(v["crate_image_digest"].is_null(), "stale sidecar leaked: {}", v);
+    assert_eq!(v["commands"][0]["oci_digest"], "sha256:aaaa");
+    assert!(v["commands"][1]["oci_digest"].is_null());
+
+    let out = bulker_cmd(tmp.path())
+        .args(["crate", "digest", "-c", cfg.to_str().unwrap(), "bulker/test-crate:1.0.0", "--verbose", "--resolve"])
+        .output().unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success());
+    assert!(!stdout.contains("stale-image-digest"), "stale sidecar leaked: {}", stdout);
+    assert!(stdout.contains("some images could not be resolved"), "{}", stdout);
+}
+
+#[test]
+fn test_crate_reinstall_drops_stale_image_digest() {
+    let tmp = TempDir::new().unwrap();
+    let cfg = init_config(&tmp);
+    install_test_crate(&tmp, &cfg);
+    let dir = tmp.path().join("bulker/manifests/bulker/test-crate/1.0.0");
+    fs::write(dir.join("crate-image-digest"), "old-image-digest").unwrap();
+
+    install_test_crate(&tmp, &cfg);
+    assert!(!dir.join("crate-image-digest").exists());
+    let v = digest_json(&tmp, &cfg, &[]);
+    assert!(v["crate_image_digest"].is_null());
+
+    let out = bulker_cmd(tmp.path())
+        .args(["crate", "inspect", "-c", cfg.to_str().unwrap(), "bulker/test-crate:1.0.0"])
+        .output().unwrap();
+    assert!(out.status.success());
+    assert!(!String::from_utf8_lossy(&out.stdout).contains("old-image-digest"));
+}
+
+#[test]
+fn test_crate_digest_json_lists_imports() {
+    let tmp = TempDir::new().unwrap();
+    let cfg = init_config(&tmp);
+    install_custom_crate(&tmp, &cfg, r#"manifest:
+  name: test-crate
+  version: 1.0.0
+  imports:
+  - bulker/alpine:default
+  - other/base:1.2
+  commands:
+  - command: cowsay
+    docker_image: nsheff/cowsay
+"#);
+    let v = digest_json(&tmp, &cfg, &[]);
+    assert_eq!(v["imports"], serde_json::json!(["bulker/alpine:default", "other/base:1.2"]));
+    assert_eq!(v["commands"].as_array().unwrap().len(), 1);
+    // "imports" is printed right after "commands" (last key)
+    let raw = bulker_cmd(tmp.path())
+        .args(["crate", "digest", "-c", cfg.to_str().unwrap(), "bulker/test-crate:1.0.0", "--json"])
+        .output().unwrap();
+    let raw = String::from_utf8_lossy(&raw.stdout);
+    assert!(raw.find("\"commands\"").unwrap() < raw.find("\"imports\"").unwrap());
+}
