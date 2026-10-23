@@ -4,27 +4,21 @@
 
 ### Added
 
-- `bulker crate digest <crate> --json` prints one JSON object with `crate`,
-  `crate_manifest_digest`, `crate_image_digest`, and `commands` (each with
-  `command`, `image`, `pair_digest`, `oci_digest`). Image digests are `null`
-  unless `--resolve` succeeds or a cached image digest exists. An `imports`
-  array lists imported crates exactly as written in the manifest. Digests and
-  `commands` cover only the crate's own commands; digest each import separately.
+- `bulker crate digest <crate> --json`: one JSON object with `crate`,
+  `crate_manifest_digest`, `crate_image_digest`, per-command `commands`
+  (`command`, `image`, `pair_digest`, `oci_digest`), and `imports`.
 
 ### Changed
 
-- `bulker crate digest --verbose --resolve` now re-resolves image digests even
-  when a cached image digest exists.
-- `bulker crate digest --resolve` no longer falls back to a cached image digest
-  when some images fail to resolve; it reports none instead.
-- Re-writing a cached manifest (install, update, re-fetch) now deletes the old
-  cached image digest, so a stale value is never reported.
+- `crate digest --resolve` always re-resolves and reports only the fresh
+  crate-image-digest (none if any image failed), never a cached one.
+- Re-caching a changed manifest drops its old cached crate-image-digest.
 
 ### Fixed
 
-- Image digest resolution now handles Docker Hub's anonymous token login,
-  registry ports with no tag (`localhost:5000/foo`), and `image@sha256:...`
-  references (used directly, no network call).
+- Image digest resolution now handles the anonymous bearer-token login
+  Docker Hub and quay.io require, registry ports with no tag
+  (`localhost:5000/foo`), and `image@sha256:...` references (no network call).
 
 ## [0.0.16] - 2026-07-10
 

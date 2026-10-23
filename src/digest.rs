@@ -148,29 +148,18 @@ pub fn crate_image_digest(
 // OCI digest resolution
 // ---------------------------------------------------------------------------
 
-/// A parsed docker image reference.
-#[derive(Debug, Clone, PartialEq)]
-struct ImageRef {
-    registry: String,
-    repo: String,
-    /// Tag (defaults to "latest"). Ignored when `digest` is set.
-    tag: String,
-    /// Content digest from an `@sha256:...` reference, if present.
-    digest: Option<String>,
-}
-
-/// Parse a docker image reference into registry, repository, tag and optional digest.
-/// The tag is taken only from the last path segment, so registry ports
-/// (`localhost:5000/foo`) are not mistaken for tags.
-fn parse_image_ref(image: &str) -> ImageRef {
+/// Parse a docker image reference into (registry, repository, reference),
+/// where reference is a tag (default "latest") or an `@sha256:...` digest.
+fn parse_image_ref(image: &str) -> (String, String, String) {
     let (name_tag, digest) = match image.rfind('@') {
-        Some(idx) => (&image[..idx], Some(image[idx + 1..].to_string())),
+        Some(idx) => (&image[..idx], Some(&image[idx + 1..])),
         None => (image, None),
     };
 
-    let seg_start = name_tag.rfind('/').map(|i| i + 1).unwrap_or(0);
-    let (name_part, tag) = match name_tag[seg_start..].rfind(':') {
-        Some(idx) => (&name_tag[..seg_start + idx], &name_tag[seg_start + idx + 1..]),
+    // Only a colon after the last '/' is a tag; earlier ones are registry ports
+    let seg = name_tag.rfind('/').map(|i| i + 1).unwrap_or(0);
+    let (name_part, tag) = match name_tag[seg..].rfind(':') {
+        Some(idx) => (&name_tag[..seg + idx], &name_tag[seg + idx + 1..]),
         None => (name_tag, "latest"),
     };
 
@@ -192,7 +181,7 @@ fn parse_image_ref(image: &str) -> ImageRef {
         )
     };
 
-    ImageRef { registry, repo, tag: tag.to_string(), digest }
+    (registry, repo, digest.unwrap_or(tag).to_string())
 }
 
 /// Attempt to resolve OCI content digests for all images in a manifest.
@@ -218,105 +207,45 @@ pub fn resolve_oci_digests(manifest: &Manifest) -> HashMap<String, String> {
     result
 }
 
-/// A parsed `WWW-Authenticate: Bearer ...` challenge.
-#[derive(Debug, Clone, PartialEq)]
-struct BearerChallenge {
-    realm: String,
-    service: Option<String>,
-    scope: Option<String>,
-}
-
-/// Parse a `WWW-Authenticate` header value of the form
-/// `Bearer realm="...",service="...",scope="..."`. Returns None if it is not
-/// a Bearer challenge or has no realm. Quoted values may contain commas.
-fn parse_bearer_challenge(header: &str) -> Option<BearerChallenge> {
-    let header = header.trim();
-    let scheme_end = header.find(char::is_whitespace)?;
-    if !header[..scheme_end].eq_ignore_ascii_case("bearer") {
-        return None;
-    }
-    let mut params: HashMap<String, String> = HashMap::new();
-    let mut chars = header[scheme_end..].chars().peekable();
-    loop {
-        while matches!(chars.peek(), Some(c) if c.is_whitespace() || *c == ',') {
-            chars.next();
-        }
-        let mut key = String::new();
-        while let Some(&c) = chars.peek() {
-            if c == '=' { break; }
-            key.push(c);
-            chars.next();
-        }
-        if chars.next().is_none() {
-            break; // no '=' found: end of input
-        }
-        let mut value = String::new();
-        if chars.peek() == Some(&'"') {
-            chars.next();
-            while let Some(c) = chars.next() {
-                match c {
-                    '\\' => { if let Some(n) = chars.next() { value.push(n); } }
-                    '"' => break,
-                    _ => value.push(c),
-                }
-            }
-        } else {
-            while let Some(&c) = chars.peek() {
-                if c == ',' { break; }
-                value.push(c);
-                chars.next();
-            }
-        }
-        params.insert(key.trim().to_ascii_lowercase(), value.trim().to_string());
-    }
-    Some(BearerChallenge {
-        realm: params.remove("realm").filter(|r| !r.is_empty())?,
-        service: params.remove("service"),
-        scope: params.remove("scope"),
-    })
-}
-
-/// Extract the bearer token from a token-endpoint JSON response
-/// (`token`, falling back to `access_token`).
-fn token_from_response(body: &str) -> Option<String> {
-    let v: Value = serde_json::from_str(body).ok()?;
-    ["token", "access_token"]
-        .iter()
-        .find_map(|k| v.get(*k).and_then(Value::as_str).filter(|s| !s.is_empty()))
-        .map(str::to_string)
-}
-
 const MANIFEST_ACCEPT: &str = "application/vnd.docker.distribution.manifest.v2+json, \
      application/vnd.oci.image.manifest.v1+json, \
      application/vnd.oci.image.index.v1+json, \
      application/vnd.docker.distribution.manifest.list.v2+json";
 
-/// Resolve a single image tag to its OCI content digest via the registry API.
-/// A reference that already pins a digest (`image@sha256:...`) is returned
-/// as-is with no network call. Supports the anonymous bearer-token flow
-/// (e.g. Docker Hub): on 401, fetch a token from the challenge realm and retry once.
-fn resolve_single_oci_digest(image: &str) -> Option<String> {
-    let r = parse_image_ref(image);
-    if let Some(d) = r.digest {
-        return Some(d);
+/// Read one `key="value"` parameter from a `Bearer realm="...",service="..."`
+/// WWW-Authenticate challenge.
+fn challenge_param(challenge: &str, key: &str) -> Option<String> {
+    challenge.split(',').find_map(|kv| {
+        let (k, v) = kv.trim().trim_start_matches("Bearer ").split_once('=')?;
+        (k.trim() == key).then(|| v.trim_matches('"').to_string())
+    })
+}
+
+/// Fetch an anonymous pull token from the realm in a 401 challenge,
+/// as Docker Hub and quay.io require even for public images.
+fn anonymous_token(challenge: &str, repo: &str) -> Option<String> {
+    let mut req = ureq::get(&challenge_param(challenge, "realm")?)
+        .query("scope", &format!("repository:{}:pull", repo));
+    if let Some(service) = challenge_param(challenge, "service") {
+        req = req.query("service", &service);
     }
-    let url = format!("https://{}/v2/{}/manifests/{}", r.registry, r.repo, r.tag);
+    let body: Value = serde_json::from_str(&req.call().ok()?.into_string().ok()?).ok()?;
+    body.get("token").or_else(|| body.get("access_token"))?.as_str().map(str::to_string)
+}
+
+/// Resolve a single image tag to its OCI content digest via the registry API.
+/// A reference already pinned to a digest (`image@sha256:...`) needs no lookup.
+fn resolve_single_oci_digest(image: &str) -> Option<String> {
+    let (registry, repo, reference) = parse_image_ref(image);
+    if reference.starts_with("sha256:") {
+        return Some(reference);
+    }
+    let url = format!("https://{}/v2/{}/manifests/{}", registry, repo, reference);
 
     let resp = match ureq::get(&url).set("Accept", MANIFEST_ACCEPT).call() {
         Ok(resp) => resp,
         Err(ureq::Error::Status(401, resp)) => {
-            let challenge = parse_bearer_challenge(resp.header("WWW-Authenticate")?)?;
-            let mut req = ureq::get(&challenge.realm);
-            if let Some(service) = &challenge.service {
-                req = req.query("service", service);
-            }
-            let scope = challenge
-                .scope
-                .clone()
-                .unwrap_or_else(|| format!("repository:{}:pull", r.repo));
-            req = req.query("scope", &scope);
-            let body = req.call().ok()?.into_string().ok()?;
-            let token = token_from_response(&body)?;
+            let token = anonymous_token(resp.header("WWW-Authenticate")?, &repo)?;
             ureq::get(&url)
                 .set("Accept", MANIFEST_ACCEPT)
                 .set("Authorization", &format!("Bearer {}", token))
@@ -464,59 +393,6 @@ impl ManifestComparison {
 }
 
 // ---------------------------------------------------------------------------
-// JSON serialization for `crate digest --json`
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, serde::Serialize, PartialEq)]
-pub struct CommandDigestReport {
-    pub command: String,
-    pub image: String,
-    pub pair_digest: String,
-    pub oci_digest: Option<String>,
-}
-
-#[derive(Debug, Clone, serde::Serialize, PartialEq)]
-pub struct CrateDigestReport {
-    #[serde(rename = "crate")]
-    pub crate_name: String,
-    pub crate_manifest_digest: String,
-    pub crate_image_digest: Option<String>,
-    pub commands: Vec<CommandDigestReport>,
-    /// Imported crates, as listed in the manifest. Their commands are not
-    /// included in the digests or `commands`; digest them separately.
-    pub imports: Vec<String>,
-}
-
-/// Build the --json report. Pure: no network, no filesystem.
-/// `oci_digests` is None when --resolve was not requested.
-/// `crate_image_digest` is the final chosen value (computed or sidecar).
-/// `imports` are the manifest's import registry paths, listed as-is.
-pub fn crate_digest_report(
-    crate_name: &str,
-    manifest_result: &CrateDigestResult,
-    crate_image_digest: Option<String>,
-    oci_digests: Option<&HashMap<String, String>>,
-    imports: &[String],
-) -> CrateDigestReport {
-    CrateDigestReport {
-        crate_name: crate_name.to_string(),
-        crate_manifest_digest: manifest_result.digest.clone(),
-        crate_image_digest,
-        commands: manifest_result
-            .pair_digests
-            .iter()
-            .map(|(cmd, img, pd)| CommandDigestReport {
-                command: cmd.clone(),
-                image: img.clone(),
-                pair_digest: pd.clone(),
-                oci_digest: oci_digests.and_then(|m| m.get(img).cloned()),
-            })
-            .collect(),
-        imports: imports.to_vec(),
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -580,55 +456,6 @@ mod tests {
                 imports: vec![],
             },
         }
-    }
-
-    #[test]
-    fn test_crate_digest_report_unresolved() {
-        let m = make_test_manifest(vec![("samtools", "quay.io/samtools:1.9"), ("bwa", "quay.io/bwa:0.7")]);
-        let r = crate_manifest_digest(&m);
-        let rep = crate_digest_report("ns/test:1", &r, None, None, &[]);
-        assert_eq!(rep.crate_name, "ns/test:1");
-        assert_eq!(rep.crate_manifest_digest, r.digest);
-        assert!(rep.crate_image_digest.is_none());
-        assert_eq!(rep.commands.len(), 2);
-        assert_eq!(rep.commands[0].command, "samtools");
-        assert_eq!(rep.commands[1].command, "bwa");
-        for (c, (_, _, pd)) in rep.commands.iter().zip(&r.pair_digests) {
-            assert_eq!(&c.pair_digest, pd);
-            assert!(c.oci_digest.is_none());
-        }
-    }
-
-    #[test]
-    fn test_crate_digest_report_resolved() {
-        let m = make_test_manifest(vec![("samtools", "quay.io/samtools:1.9"), ("bwa", "quay.io/bwa:0.7")]);
-        let r = crate_manifest_digest(&m);
-        let mut oci = HashMap::new();
-        oci.insert("quay.io/samtools:1.9".to_string(), "sha256:abc".to_string());
-        let rep = crate_digest_report("ns/test:1", &r, Some("img-digest".to_string()), Some(&oci), &[]);
-        assert_eq!(rep.crate_image_digest.as_deref(), Some("img-digest"));
-        assert_eq!(rep.commands[0].oci_digest.as_deref(), Some("sha256:abc"));
-        assert!(rep.commands[1].oci_digest.is_none());
-    }
-
-    #[test]
-    fn test_crate_digest_report_json_shape() {
-        let m = make_test_manifest(vec![("samtools", "quay.io/samtools:1.9")]);
-        let r = crate_manifest_digest(&m);
-        let rep = crate_digest_report("ns/test:1", &r, None, None, &[]);
-        let v = serde_json::to_value(&rep).unwrap();
-        let obj = v.as_object().unwrap();
-        let mut keys: Vec<&str> = obj.keys().map(|k| k.as_str()).collect();
-        keys.sort();
-        assert_eq!(keys, vec!["commands", "crate", "crate_image_digest", "crate_manifest_digest", "imports"]);
-        assert_eq!(obj["imports"], serde_json::json!([]));
-        assert_eq!(obj["crate_image_digest"], Value::Null);
-        let cmd = obj["commands"][0].as_object().unwrap();
-        let mut ck: Vec<&str> = cmd.keys().map(|k| k.as_str()).collect();
-        ck.sort();
-        assert_eq!(ck, vec!["command", "image", "oci_digest", "pair_digest"]);
-        assert_eq!(cmd["oci_digest"], Value::Null);
-        assert!(serde_json::to_string(&rep).unwrap().starts_with("{\"crate\":"));
     }
 
     #[test]
@@ -716,118 +543,62 @@ mod tests {
         assert_eq!(cmp.image_diffs[0].command, "samtools");
     }
 
-    fn img(reg: &str, repo: &str, tag: &str, digest: Option<&str>) -> ImageRef {
-        ImageRef {
-            registry: reg.to_string(),
-            repo: repo.to_string(),
-            tag: tag.to_string(),
-            digest: digest.map(str::to_string),
-        }
-    }
-
     #[test]
     fn test_parse_image_ref_docker_hub() {
-        assert_eq!(parse_image_ref("python:3.7"), img("registry-1.docker.io", "library/python", "3.7", None));
+        let (reg, repo, tag) = parse_image_ref("python:3.7");
+        assert_eq!(reg, "registry-1.docker.io");
+        assert_eq!(repo, "library/python");
+        assert_eq!(tag, "3.7");
     }
 
     #[test]
     fn test_parse_image_ref_quay() {
-        assert_eq!(
-            parse_image_ref("quay.io/biocontainers/samtools:1.9"),
-            img("quay.io", "biocontainers/samtools", "1.9", None)
-        );
+        let (reg, repo, tag) = parse_image_ref("quay.io/biocontainers/samtools:1.9");
+        assert_eq!(reg, "quay.io");
+        assert_eq!(repo, "biocontainers/samtools");
+        assert_eq!(tag, "1.9");
     }
 
     #[test]
     fn test_parse_image_ref_no_tag() {
-        assert_eq!(parse_image_ref("python").tag, "latest");
+        let (_, _, tag) = parse_image_ref("python");
+        assert_eq!(tag, "latest");
     }
 
     #[test]
     fn test_parse_image_ref_org_no_registry() {
-        assert_eq!(
-            parse_image_ref("nsheff/cowsay:latest"),
-            img("registry-1.docker.io", "nsheff/cowsay", "latest", None)
-        );
+        let (reg, repo, tag) = parse_image_ref("nsheff/cowsay:latest");
+        assert_eq!(reg, "registry-1.docker.io");
+        assert_eq!(repo, "nsheff/cowsay");
+        assert_eq!(tag, "latest");
     }
 
     #[test]
-    fn test_parse_image_ref_registry_port_no_tag() {
-        assert_eq!(parse_image_ref("localhost:5000/foo"), img("localhost:5000", "foo", "latest", None));
-        assert_eq!(
-            parse_image_ref("localhost:5000/org/foo:1.2"),
-            img("localhost:5000", "org/foo", "1.2", None)
-        );
-        assert_eq!(parse_image_ref("localhost/foo"), img("localhost", "foo", "latest", None));
+    fn test_parse_image_ref_registry_port() {
+        let (reg, repo, tag) = parse_image_ref("localhost:5000/foo");
+        assert_eq!(reg, "localhost:5000");
+        assert_eq!(repo, "foo");
+        assert_eq!(tag, "latest");
+        let (reg, repo, tag) = parse_image_ref("localhost:5000/org/foo:1.2");
+        assert_eq!((reg.as_str(), repo.as_str(), tag.as_str()), ("localhost:5000", "org/foo", "1.2"));
     }
 
     #[test]
     fn test_parse_image_ref_digest() {
         let d = "sha256:0123456789abcdef";
-        assert_eq!(
-            parse_image_ref(&format!("python@{}", d)),
-            img("registry-1.docker.io", "library/python", "latest", Some(d))
-        );
-        assert_eq!(
-            parse_image_ref(&format!("quay.io/org/tool:1.0@{}", d)),
-            img("quay.io", "org/tool", "1.0", Some(d))
-        );
-        assert_eq!(
-            parse_image_ref(&format!("localhost:5000/foo@{}", d)),
-            img("localhost:5000", "foo", "latest", Some(d))
-        );
+        let (reg, repo, r) = parse_image_ref(&format!("quay.io/org/tool:1.0@{}", d));
+        assert_eq!((reg.as_str(), repo.as_str(), r.as_str()), ("quay.io", "org/tool", d));
+        let (reg, repo, r) = parse_image_ref(&format!("python@{}", d));
+        assert_eq!((reg.as_str(), repo.as_str(), r.as_str()), ("registry-1.docker.io", "library/python", d));
+        // Pinned digests resolve with no network call
+        assert_eq!(resolve_single_oci_digest(&format!("python@{}", d)).as_deref(), Some(d));
     }
 
     #[test]
-    fn test_resolve_digest_reference_without_network() {
-        let d = "sha256:0123456789abcdef";
-        assert_eq!(resolve_single_oci_digest(&format!("quay.io/org/tool:1.0@{}", d)).as_deref(), Some(d));
-    }
-
-    #[test]
-    fn test_parse_bearer_challenge_docker_hub() {
+    fn test_challenge_param() {
         let h = r#"Bearer realm="https://auth.docker.io/token",service="registry.docker.io",scope="repository:library/python:pull""#;
-        assert_eq!(
-            parse_bearer_challenge(h),
-            Some(BearerChallenge {
-                realm: "https://auth.docker.io/token".to_string(),
-                service: Some("registry.docker.io".to_string()),
-                scope: Some("repository:library/python:pull".to_string()),
-            })
-        );
-    }
-
-    #[test]
-    fn test_parse_bearer_challenge_variants() {
-        // Case-insensitive scheme, spaces after commas, commas inside quotes, unquoted value
-        let c = parse_bearer_challenge(
-            r#"bearer realm="https://ghcr.io/token", scope="repository:a/b:pull,push", service=ghcr.io"#,
-        )
-        .unwrap();
-        assert_eq!(c.realm, "https://ghcr.io/token");
-        assert_eq!(c.scope.as_deref(), Some("repository:a/b:pull,push"));
-        assert_eq!(c.service.as_deref(), Some("ghcr.io"));
-
-        // Realm only
-        let c = parse_bearer_challenge(r#"Bearer realm="https://x/token""#).unwrap();
-        assert_eq!(c.service, None);
-        assert_eq!(c.scope, None);
-    }
-
-    #[test]
-    fn test_parse_bearer_challenge_rejects() {
-        assert_eq!(parse_bearer_challenge(r#"Basic realm="x""#), None);
-        assert_eq!(parse_bearer_challenge(r#"Bearer service="x""#), None);
-        assert_eq!(parse_bearer_challenge("Bearer"), None);
-        assert_eq!(parse_bearer_challenge(""), None);
-    }
-
-    #[test]
-    fn test_token_from_response() {
-        assert_eq!(token_from_response(r#"{"token":"abc","access_token":"xyz"}"#).as_deref(), Some("abc"));
-        assert_eq!(token_from_response(r#"{"access_token":"xyz"}"#).as_deref(), Some("xyz"));
-        assert_eq!(token_from_response(r#"{"token":"","access_token":"xyz"}"#).as_deref(), Some("xyz"));
-        assert_eq!(token_from_response(r#"{"other":1}"#), None);
-        assert_eq!(token_from_response("not json"), None);
+        assert_eq!(challenge_param(h, "realm").as_deref(), Some("https://auth.docker.io/token"));
+        assert_eq!(challenge_param(h, "service").as_deref(), Some("registry.docker.io"));
+        assert_eq!(challenge_param(r#"Basic realm="x""#, "realm"), None);
     }
 }

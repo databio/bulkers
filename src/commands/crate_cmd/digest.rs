@@ -2,10 +2,11 @@ use std::collections::HashMap;
 
 use anyhow::Result;
 use clap::{Arg, ArgAction, ArgMatches, Command};
+use serde_json::{json, Value};
 
 use crate::config::load_config;
 use crate::digest;
-use crate::manifest::{parse_registry_path, CrateVars, Manifest};
+use crate::manifest::parse_registry_path;
 use crate::manifest_cache;
 
 pub fn create_cli() -> Command {
@@ -16,7 +17,6 @@ EXAMPLES:
   bulker crate digest databio/peppro:1.0.14
   bulker crate digest databio/peppro:1.0.14 --verbose
   bulker crate digest databio/peppro:1.0.14 --resolve
-  bulker crate digest databio/peppro:1.0.14 --json
   bulker crate digest databio/peppro:1.0.14 --json --resolve")
         .arg(
             Arg::new("crate_registry_path")
@@ -39,7 +39,7 @@ EXAMPLES:
             Arg::new("resolve")
                 .long("resolve")
                 .action(ArgAction::SetTrue)
-                .help("Resolve OCI image digests from registries (requires network); applies to --verbose and --json"),
+                .help("Resolve OCI image digests from registries (requires network)"),
         )
 }
 
@@ -63,18 +63,40 @@ pub fn run(matches: &ArgMatches) -> Result<()> {
     // Ensure sidecar is written
     manifest_cache::write_digest_sidecar(&cv, "crate-manifest-digest", &result.digest)?;
 
-    if json {
-        let (img, oci) = image_digests(&cv, &manifest, resolve)?;
-        let report = digest::crate_digest_report(
-            &cv.display_name(), &result, img, oci.as_ref(), &manifest.manifest.imports,
-        );
-        let out = serde_json::to_string_pretty(&report)?;
-        println!("{}", out);
+    if !verbose && !json {
+        println!("{}", result.digest);
         return Ok(());
     }
 
-    if !verbose {
-        println!("{}", result.digest);
+    // crate-image-digest: with --resolve, only the fresh result counts (None if
+    // any image failed), so a cached value is never shown beside fresh OCI digests
+    let mut oci_digests = HashMap::new();
+    let image_digest = if resolve {
+        log::info!("Resolving OCI digests from registries...");
+        oci_digests = digest::resolve_oci_digests(&manifest);
+        let img = digest::crate_image_digest(&manifest, &oci_digests).map(|r| r.digest);
+        if let Some(d) = &img {
+            manifest_cache::write_digest_sidecar(&cv, "crate-image-digest", d)?;
+        }
+        img
+    } else {
+        manifest_cache::read_digest_sidecar(&cv, "crate-image-digest")
+    };
+
+    if json {
+        let commands: Vec<Value> = result.pair_digests.iter().map(|(cmd, img, pd)| json!({
+            "command": cmd,
+            "image": img,
+            "pair_digest": pd,
+            "oci_digest": oci_digests.get(img),
+        })).collect();
+        println!("{}", serde_json::to_string_pretty(&json!({
+            "crate": cv.display_name(),
+            "crate_manifest_digest": result.digest,
+            "crate_image_digest": image_digest,
+            "commands": commands,
+            "imports": manifest.manifest.imports,
+        }))?);
         return Ok(());
     }
 
@@ -82,8 +104,6 @@ pub fn run(matches: &ArgMatches) -> Result<()> {
     println!("Crate: {}", cv.display_name());
     println!("crate-manifest-digest:  {}", result.digest);
     println!("  sorted:               {}", result.sorted_digest);
-
-    let (image_digest, _) = image_digests(&cv, &manifest, resolve)?;
     match image_digest {
         Some(d) => println!("crate-image-digest:     {}", d),
         None if resolve => println!("crate-image-digest:     not available (some images could not be resolved)"),
@@ -97,30 +117,4 @@ pub fn run(matches: &ArgMatches) -> Result<()> {
     }
 
     Ok(())
-}
-
-type ImageDigests = (Option<String>, Option<HashMap<String, String>>);
-
-/// Returns (crate_image_digest, oci_digests_if_resolved).
-/// Without `resolve`, the cached sidecar is used. With `resolve`, only the
-/// freshly computed value is used (None if any image failed to resolve), so a
-/// stale sidecar is never reported next to fresh per-command OCI digests.
-fn image_digests(
-    cv: &CrateVars,
-    manifest: &Manifest,
-    resolve: bool,
-) -> Result<ImageDigests> {
-    if !resolve {
-        return Ok((manifest_cache::read_digest_sidecar(cv, "crate-image-digest"), None));
-    }
-    log::info!("Resolving OCI digests from registries...");
-    let oci = digest::resolve_oci_digests(manifest);
-    let img = match digest::crate_image_digest(manifest, &oci) {
-        Some(r) => {
-            manifest_cache::write_digest_sidecar(cv, "crate-image-digest", &r.digest)?;
-            Some(r.digest)
-        }
-        None => None,
-    };
-    Ok((img, Some(oci)))
 }
