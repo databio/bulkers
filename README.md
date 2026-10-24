@@ -13,7 +13,7 @@ It is useful when you want to:
 ## Install
 
 ```bash
-curl -sL https://raw.githubusercontent.com/databio/bulkers/master/install.sh | bash
+curl -sL https://bulker.io/install.sh | bash
 ```
 
 This downloads the binary and adds a shell function to your `~/.bashrc` (or `~/.zshrc`) that enables `bulker activate` to modify your current shell and `bulker deactivate` to restore it.
