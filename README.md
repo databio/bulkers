@@ -1,6 +1,14 @@
 # bulker
 
-Multi-container environment manager.
+Bulker gives you command-line tools without installing them. A *crate* is a short YAML file that lists commands and the container image each one runs in. Activate a crate and those commands (`samtools`, `bedtools`, `python`, ...) are on your `PATH`; each call runs in its container, in your current directory with your home folder mounted, as if the tool were installed locally.
+
+It is useful when you want to:
+
+- **Pin exact tool versions** for a pipeline or analysis, so a rerun months later uses the same software.
+- **Avoid installs and version conflicts**: no system packages, no conda solves, and two tools that need different library versions can sit side by side.
+- **Use the same environment everywhere**: Docker on a laptop, Apptainer on an HPC cluster, from the same crate.
+- **Share an environment** by sharing one YAML file, or switch between tool sets per project with `bulker activate`.
+- **Run tools from scripts and AI agents** with `bulker exec`, which needs no shell setup.
 
 ## Install
 
@@ -32,33 +40,7 @@ eval "$(bulker init-shell bash)"   # for bash
 eval "$(bulker init-shell zsh)"    # for zsh
 ```
 
-Or build from source: `cargo install --path .`
-
-### Local repo install
-
-To install from a local clone of the repo:
-
-```bash
-cargo build --release
-./install.sh
-source ~/.bashrc  # or: source ~/.zshrc
-```
-
-This builds the binary, copies it to `~/.local/bin/`, and adds the shell function to your shell rc file.
-
-
-## Uninstall
-
-```bash
-# Remove binary
-rm ~/.local/bin/bulker
-
-# Remove config and cached manifests
-rm -rf ~/.config/bulker
-
-# Remove the shell function from your rc file
-# Delete the `eval "$(bulker init-shell ...)"` line from ~/.bashrc or ~/.zshrc
-```
+Or build from source: `cargo install --path .`, or from a clone run `./install.sh`, which builds the binary, copies it to `~/.local/bin/`, and adds the shell function to your rc file.
 
 ## Usage
 
@@ -83,7 +65,7 @@ bulker crate inspect <name>       # show commands available in a crate
 bulker crate digest <name> [--json] [--resolve]  # content digests for provenance
 ```
 
-`bulker crate digest <name> --json` prints one JSON object with the crate's `crate_manifest_digest`, its `crate_image_digest`, a `commands` list (`command`, `image`, `pair_digest`, `oci_digest`), and the crate's `imports`. Image digests are `null` unless `--resolve` fetches them from the registries (needs network) or an earlier resolve cached them. Imported crates are not included in the digests; digest each one separately.
+`crate digest` reports content digests that pin exactly which software a crate runs. `--resolve` fetches image digests from the registries (needs network); `--json` prints one machine-readable object. Imported crates are digested separately.
 
 ### Configuration
 
@@ -92,10 +74,7 @@ bulker config init                # create new config file
 bulker config show                # print current config
 bulker config get <key>           # get a config value
 bulker config set <key>=<value>   # set a config value
-bulker env                        # show env var forwarding settings
-bulker env add <name>             # forward a host var (or glob pattern)
-bulker env set <KEY>=<VALUE>      # hardcode a value
-bulker env remove <name>          # stop forwarding a var
+bulker env                        # env var forwarding (see "Environment variable modes")
 ```
 
 ## Crate format reference
@@ -133,7 +112,7 @@ The shell function (`bulker activate`/`bulker deactivate`) modifies the current 
 # Run a single command in a crate environment (no shell function needed)
 bulker exec bulker/demo -- cowsay hello
 
-# Run multiple commands
+# A versioned crate, with arguments
 bulker exec databio/pepatac:1.0.13 -- samtools view -h input.bam
 
 # Strict mode (only crate commands on PATH)
@@ -146,14 +125,12 @@ bulker exec -s bulker/demo -- cowsay hi
 
 By default, bulker forwards a curated allowlist of host environment variables into containers — terminal settings, locale, SSH agent, HPC scheduler vars, and similar. This keeps containers clean while still working seamlessly in most environments.
 
-Use `--host-env` to forward all host vars (the old default), or `-s` to restrict PATH to crate commands only. These are independent — combine them as needed:
+Two options change this, and they combine freely:
 
-| Mode | `bulker activate` | `bulker exec` | Host commands | Host env vars |
-|---|---|---|---|---|
-| Most lenient | `bulker activate --host-env crate` | `bulker exec --host-env crate -- cmd` | **Lenient**: All (shimdir prepended to PATH) | **Lenient**: All host vars |
-| Default | `bulker activate crate` | `bulker exec crate -- cmd` | **Lenient**: All (shimdir prepended to PATH) | **Strict**: Allowlist only |
-| Strict PATH, lenient env | `bulker activate -s --host-env crate` | `bulker exec -s --host-env crate -- cmd` | **Strict**: Crate + `host_commands` only | **Lenient**: All host vars |
-| Most strict | `bulker activate -s crate` | `bulker exec -s crate -- cmd` | **Strict**: Crate + `host_commands` only | **Strict**: Allowlist only |
+- `--host-env` forwards **all** host environment variables instead of the allowlist.
+- `-s` (strict) puts **only** the crate's commands (plus its `host_commands`) on `PATH`, hiding host commands.
+
+Both work with `bulker activate` and `bulker exec`.
 
 ### Managing the env var allowlist
 
@@ -169,6 +146,43 @@ The allowlist is built from four layers (later wins): compiled-in defaults → m
 
 For Apptainer, `--cleanenv` is always active; allowed vars are passed explicitly via `--env`.
 
+## Debugging
+
+Print the docker command that bulker generates without running it:
+
+```bash
+bulker exec -p local/bedbase-test -- postgres
+bulker exec --print-command local/bedbase-test -- postgres
+```
+
+Output goes to stdout, so it can be piped or saved:
+
+```bash
+bulker exec -p local/bedbase-test -- postgres | pbcopy
+```
+
+When using an activated environment, set the env var directly:
+
+```bash
+BULKER_PRINT_COMMAND=1 samtools view input.bam
+```
+
+## Interactive container shells
+
+Every command shimlink has a corresponding `_command` variant (prefixed with underscore)
+that drops you into an interactive bash shell inside the container:
+
+```bash
+bulker activate local/bedbase-test
+_postgres    # opens bash inside the postgres container
+```
+
+This is useful for debugging — you can inspect the container filesystem, check installed
+packages, or run the command manually with different arguments.
+
+These `_command` shimlinks are created automatically for every command in the manifest.
+They're available whenever a crate is activated.
+
 ## macOS notes
 
 On Linux, bulker adds `--network=host` and mounts system volumes (`/etc/passwd`, etc.)
@@ -178,74 +192,35 @@ where host networking and system volume mounts don't work as expected.
 These defaults are set in `bulker_config.yaml` via `host_network` and `system_volumes`
 keys. You can override them:
 
-    bulker config set host_network=true    # force host networking
-    bulker config set system_volumes=true  # force system volume mounts
+```bash
+bulker config set host_network=true    # force host networking
+bulker config set system_volumes=true  # force system volume mounts
+```
 
 For services that need port access on macOS, use explicit port mappings in dockerargs:
 
-    commands:
-    - command: postgres
-      docker_image: postgres:latest
-      dockerargs: "-p 5432:5432"
+```yaml
+commands:
+- command: postgres
+  docker_image: postgres:latest
+  dockerargs: "-p 5432:5432"
+```
 
 On Linux, this isn't needed — containers can bind ports directly via host networking.
 
-## Debugging
-
-Print the docker command that bulker generates without running it:
-
-    bulker exec -p local/bedbase-test -- postgres
-    bulker exec --print-command local/bedbase-test -- postgres
-
-Output goes to stdout, so it can be piped or saved:
-
-    bulker exec -p local/bedbase-test -- postgres | pbcopy
-
-When using an activated environment, set the env var directly:
-
-    BULKER_PRINT_COMMAND=1 samtools view input.bam
-
-## Interactive container shells
-
-Every command shimlink has a corresponding `_command` variant (prefixed with underscore)
-that drops you into an interactive bash shell inside the container:
-
-    bulker activate local/bedbase-test
-    _postgres    # opens bash inside the postgres container
-
-This is useful for debugging — you can inspect the container filesystem, check installed
-packages, or run the command manually with different arguments.
-
-These `_command` shimlinks are created automatically for every command in the manifest.
-They're available whenever a crate is activated.
-
 ## Running services
 
-Bulker is designed for CLI-style commands (run, get output, exit). For long-running
-services like databases, run in a separate terminal:
+Bulker is built for CLI-style commands (run, get output, exit). A service such as a database can run in a separate terminal (`bulker exec <crate> -- postgres`), or detached with `BULKER_EXTRA_DOCKER_ARGS="-d --name my-postgres"`. Containers always run with `--rm`, so add a named volume in the command's `dockerargs` (e.g. `-v pgdata:/var/lib/postgresql/data`) for data that should persist. For multi-service setups, use docker compose instead.
 
-    bulker exec local/bedbase-test -- postgres
+## Uninstall
 
-Or detach with the existing docker args escape hatch:
+```bash
+# Remove binary
+rm ~/.local/bin/bulker
 
-    BULKER_EXTRA_DOCKER_ARGS="-d --name my-postgres" bulker exec local/bedbase-test -- postgres
+# Remove config and cached manifests
+rm -rf ~/.config/bulker
 
-Then manage with docker directly:
-
-    docker logs my-postgres
-    docker stop my-postgres
-
-For multi-service setups (app + database + cache), use docker compose instead — it
-handles networking, health checks, and dependency ordering that bulker intentionally
-does not.
-
-### Persistent data
-
-`--rm` is always set, so container data is ephemeral by default. For data that
-should survive restarts, add a named volume in dockerargs:
-
-    commands:
-    - command: postgres
-      docker_image: postgres:16
-      no_user: true
-      dockerargs: "-v pgdata:/var/lib/postgresql/data -p 5432:5432 -e POSTGRES_PASSWORD=dev"
+# Remove the shell function from your rc file
+# Delete the `eval "$(bulker init-shell ...)"` line from ~/.bashrc or ~/.zshrc
+```
